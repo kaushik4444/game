@@ -1,0 +1,9 @@
+# One-click deploy on Render (render.com): New + > Blueprint, pick this repo.
+services:
+  - type: web
+    name: card-table
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz

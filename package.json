@@ -1,0 +1,16 @@
+{
+  "name": "card-table",
+  "version": "0.1.0",
+  "description": "Browser-based multiplayer board and card games (starting with Wizard)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node tests/engine.test.js && node tests/twentynine.test.js && node tests/smoke.test.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
