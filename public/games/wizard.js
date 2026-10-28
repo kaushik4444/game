@@ -1,42 +1,24 @@
-/* Wizard table renderer. Registered with the app shell via CardTable.register('wizard', ...). */
+/* Wizard table renderer (poker-table layout). Registered with the app shell via CardTable.register('wizard', ...). */
 (() => {
   'use strict';
-  const { esc, toast } = window.CardTable;
-
-  const SUITS = {
-    R: { sym: '♥', name: 'Red' },
-    Y: { sym: '★', name: 'Yellow' },
-    G: { sym: '♣', name: 'Green' },
-    B: { sym: '♠', name: 'Blue' },
-  };
-  const cardName = (c) => (c.type === 'back' ? 'Hidden card' : c.type === 'wizard' ? 'Wizard' : c.type === 'jester' ? 'Jester' : `${SUITS[c.suit].name} ${c.rank}`);
+  const { esc, toast, pt } = window.CardTable;
+  const WC = window.WizardCards;
 
   // UI-only state that survives re-renders (the server is the source of truth for the game itself).
   const ui = { selected: null, bid: null, scores: false, shownKey: null, timer: null, prevTrick: new Set(), ctx: null, latest: null, round: 0 };
 
-  function cardHTML(c, { tag = 'div', cls = '', attrs = '' } = {}) {
-    const label = esc(cardName(c));
-    if (c.type === 'back') {
-      return `<${tag} class="card back ${cls}" aria-label="Your hidden card" ${attrs}><span class="pip">?</span></${tag}>`;
-    }
-    if (c.type === 'wizard') {
-      return `<${tag} class="card wizard ${cls}" aria-label="${label}" ${attrs}><span class="rk">W</span><span class="pip">🧙</span><span class="rk br">W</span></${tag}>`;
-    }
-    if (c.type === 'jester') {
-      return `<${tag} class="card jester ${cls}" aria-label="${label}" ${attrs}><span class="rk">J</span><span class="pip">🃏</span><span class="rk br">J</span></${tag}>`;
-    }
-    const s = SUITS[c.suit].sym;
-    return `<${tag} class="card suit-${c.suit} ${cls}" aria-label="${label}" ${attrs}><span class="rk">${c.rank}<i>${s}</i></span><span class="pip">${s}</span><span class="rk br">${c.rank}<i>${s}</i></span></${tag}>`;
-  }
-
-  const suitPill = (s) => `<span class="pill suit-${s}"><b>${SUITS[s].sym}</b> ${SUITS[s].name}</span>`;
+  const cardHTML = WC.cardHTML;
+  const suitPill = (s) => `<span class="pill suit-${s}">${WC.suitIcon(s)} ${WC.SUITS[s].name}</span>`;
+  const cardName = (c) => (c.type === 'back' ? 'Hidden card' : c.type === 'wizard' ? 'Wizard' : c.type === 'jester' ? 'Jester' : `${WC.SUITS[c.suit].one} ${c.rank}`);
+  const VARIANT_NAMES = { none: 'Standard bidding', plusminus: 'Plus / Minus 1', hidden: 'Hidden prediction', secret: 'Secret prediction' };
 
   function sizes(v) {
     const w = window.innerWidth;
     const h = window.innerHeight;
     let cw = w < 480 ? 62 : w < 900 ? 78 : 90;
     if (h < 620) cw = Math.min(cw, 56);
-    const tcw = v.n > 4 ? Math.round(cw * 0.82) : cw;
+    let tcw = w < 480 ? 50 : w < 900 ? 62 : 76;
+    if (v.n >= 5) tcw = Math.round(tcw * 0.86);
     // Hand: overlap cards when they don't fit, scroll sideways if still too wide.
     const n = v.hand.length;
     const avail = Math.min(w, 980) - 20;
@@ -57,74 +39,62 @@
     }
     if (v.phase === 'bidding') return v.myTurn ? 'Your bid: how many tricks will you win?' : `${name(v.turn)} is bidding…`;
     if (v.phase === 'playing') {
-      if (v.myTurn) return ui.selected ? 'Tap the card again, or press Play' : 'Your turn. Pick a card.';
-      return `${name(v.turn)} is playing…`;
+      if (v.myTurn) return wonPrefix(v) + (ui.selected ? 'Tap the card again, or press Play' : 'Your turn. Pick a card.');
+      return wonPrefix(v) + `${name(v.turn)} is playing…`;
     }
     if (v.phase === 'roundEnd') return 'Round complete';
     return 'Game over';
   }
 
-  function playersHTML(v) {
-    const order = [];
-    for (let k = 0; k < v.n; k++) order.push((Math.max(v.me, 0) + k) % v.n);
-    return order
-      .map((i) => {
-        const p = v.players[i];
-        const turn = v.turn === i && (v.phase === 'bidding' || v.phase === 'playing' || v.phase === 'chooseTrump');
-        let line;
-        if (p.bid !== null) line = `bid ${p.bid} · won ${p.tricks}`;
-        else if (v.simultaneous && p.hasBid) line = v.phase === 'bidding' ? 'bid placed ✓' : `bid hidden · won ${p.tricks}`;
-        else line = turn && v.phase === 'bidding' ? 'bidding…' : 'no bid yet';
-        const fs = (v.foresight || []).find((f) => f.player === i);
-        const hit = p.bid !== null && p.tricks === p.bid;
-        return `<div class="chip ${turn ? 'turn' : ''} ${i === v.me ? 'me' : ''} ${fs ? 'hasfs' : ''}">
-          ${fs ? `<div class="fs" title="${esc(p.name)}’s card">${cardHTML(fs.card)}</div>` : ''}
-          <div class="nm">${esc(p.name)}${i === v.me ? ' (you)' : ''}${i === v.dealer ? '<span class="dbadge" title="Dealer">D</span>' : ''}</div>
-          <div class="st ${hit && v.phase === 'playing' ? 'ok' : ''}">${line}</div>
-          <div class="sc">${p.score} pts</div>
-        </div>`;
-      })
-      .join('');
+  function seatsHTML(v, ctx, i) {
+    const p = v.players[i];
+    const turn = v.turn === i && (v.phase === 'bidding' || v.phase === 'playing' || v.phase === 'chooseTrump');
+    let sub;
+    if (p.bid !== null) sub = `bid ${p.bid} · won ${p.tricks}`;
+    else if (v.simultaneous && p.hasBid) sub = v.phase === 'bidding' ? 'bid placed ✓' : `bid hidden · won ${p.tricks}`;
+    else sub = turn && v.phase === 'bidding' ? 'bidding…' : 'no bid yet';
+    const fs = (v.foresight || []).find((f) => f.player === i);
+    const extra = `<span class="score-badge" title="Score">${p.score}</span>${fs ? `<span class="fs" title="${esc(p.name)}’s card">${cardHTML(fs.card)}</span>` : ''}`;
+    return pt.seatHTML({ pid: p.id, name: p.name, avatar: pt.avatarOf(ctx.room, p.id), sub, turn, dealer: i === v.dealer, first: i === (v.dealer + 1) % v.players.length, me: i === v.me, extra });
   }
 
-  function trickHTML(v, z) {
+  /** Turned-up trump card and trump suit, in the table corner so the middle stays free for played cards. */
+  function cornerHTML(v) {
+    let card = '';
+    let cap;
+    if (v.trumpCard) {
+      card = `<div class="tcard">${cardHTML(v.trumpCard)}</div>`;
+      cap = v.phase === 'chooseTrump' ? '<b>Wizard turned up</b><br>dealer picks trump' : v.trumpSuit ? 'Trump<br>' + suitPill(v.trumpSuit) : '<b>No trump</b>';
+    } else cap = '<b>No trump</b><br>last round';
+    return `${card}<div class="cap">${cap}</div>`;
+  }
+
+  const wonPrefix = (v) => (v.phase === 'playing' && !v.trick.length && v.lastTrick ? `${esc(v.players[v.lastTrick.winner].name)} won the trick. ` : '');
+
+  function tableHTML(v, ctx, z) {
     const live = v.trick.length > 0;
     const shown = live ? v.trick : v.lastTrick ? v.lastTrick.cards : [];
+    const winner = !live && v.lastTrick ? v.lastTrick.winner : -1;
     const ids = new Set(shown.map((t) => t.card.id));
-    let html;
-    if (!shown.length) {
-      const total = v.players.reduce((s, p) => s + (p.bid || 0), 0);
-      const placed = v.players.filter((p) => p.hasBid).length;
-      const fsNote = v.foresight && v.foresight.length ? ' Foresight: you can’t see your own card, but you can see the others.' : '';
-      const msg =
-        v.phase === 'bidding' ? (v.simultaneous ? `Bids placed: ${placed} of ${v.n}.${fsNote}` : `Bids so far: ${total} of ${v.round} trick${v.round === 1 ? '' : 's'}.${fsNote}`) : v.phase === 'chooseTrump' ? 'Waiting for trump…' : 'Lead the first card';
-      html = `<div class="hint">${esc(msg)}</div>`;
-    } else {
-      const winner = !live && v.lastTrick ? v.lastTrick.winner : -1;
-      const cards = shown
-        .map((t) => {
-          const isNew = live && !ui.prevTrick.has(t.card.id);
-          return `<div class="tslot ${t.player === winner ? 'win' : ''}">${cardHTML(t.card, { cls: isNew ? 'pop' : '' })}<span class="who">${esc(v.players[t.player].name)}</span></div>`;
-        })
-        .join('');
-      const cap = !live && v.lastTrick ? `<div class="hint">${esc(v.players[v.lastTrick.winner].name)} won the trick</div>` : '';
-      html = `${cap}<div class="trick" style="--cw:${z.tcw}px">${cards}</div>`;
-    }
+    const html = pt.tableHTML({
+      n: v.n,
+      me: v.me,
+      seat: (i) => seatsHTML(v, ctx, i),
+      card: (i) => {
+        const t = shown.find((x) => x.player === i);
+        return t ? { html: cardHTML(t.card, { cls: live && !ui.prevTrick.has(t.card.id) ? 'pop' : '' }), win: i === winner } : null;
+      },
+      corner: cornerHTML(v),
+      info: `<span>${esc(VARIANT_NAMES[v.options.variant])}${v.options.foresight ? ' · Foresight' : ''}</span><span>Round ${v.round} / ${v.totalRounds}</span>`,
+    });
     ui.prevTrick = ids;
     return html;
   }
 
-  function trumpHTML(v) {
-    if (v.phase === 'chooseTrump') return '<span class="label">Trump: dealer chooses</span>';
-    const card = v.trumpCard ? `<div class="mini">${cardHTML(v.trumpCard)}</div>` : '';
-    const txt = v.trumpSuit ? `<div><span class="label">Trump</span><div>${suitPill(v.trumpSuit)}</div></div>` : `<div><span class="label">Trump</span><div><b>None</b></div></div>`;
-    return card + txt;
-  }
-
   function controlsHTML(v) {
     if (v.phase === 'chooseTrump' && v.myTurn) {
-      return `<div class="bidbox"><div class="label">Choose the trump suit</div><div class="bidgrid">${Object.keys(SUITS)
-        .map((s) => `<button class="suitbtn suit-${s}" data-wz="trump" data-s="${s}"><b>${SUITS[s].sym}</b> ${SUITS[s].name}</button>`)
+      return `<div class="bidbox"><div class="label">Choose the trump suit</div><div class="bidgrid">${Object.keys(WC.SUITS)
+        .map((s) => `<button class="suitbtn suit-${s}" data-wz="trump" data-s="${s}">${WC.suitIcon(s)} ${WC.SUITS[s].name}</button>`)
         .join('')}</div></div>`;
     }
     if (v.phase === 'bidding' && v.myTurn) {
@@ -133,9 +103,10 @@
         btns.push(`<button class="bidbtn ${ui.bid === i ? 'on' : ''}" data-wz="pick" data-n="${i}" ${i === v.forbiddenBid ? 'disabled' : ''}>${i}</button>`);
       }
       const note = v.forbiddenBid !== null ? `<div class="hint">Plus / Minus 1: as dealer you can’t bid ${v.forbiddenBid}, because the total would equal the number of tricks.</div>` : '';
+      const fsNote = v.foresight && v.foresight.length ? '<div class="hint">Foresight: you can’t see your own card, but you can see everyone else’s.</div>' : '';
       return `<div class="bidbox"><div class="row" style="justify-content:space-between"><span class="label">Tricks you will win</span>
         <button class="btn small" data-wz="bid" ${ui.bid === null ? 'disabled' : ''}>${ui.bid === null ? 'Pick a number' : `Bid ${ui.bid}`}</button></div>
-        <div class="bidgrid">${btns.join('')}</div>${note}</div>`;
+        <div class="bidgrid">${btns.join('')}</div>${note}${fsNote}</div>`;
     }
     return '';
   }
@@ -151,7 +122,6 @@
       .join('');
   }
 
-  const VARIANT_NAMES = { none: 'Standard bidding', plusminus: 'Plus / Minus 1', hidden: 'Hidden prediction', secret: 'Secret prediction' };
   function optionsLine(v) {
     const o = v.options;
     return [VARIANT_NAMES[o.variant], o.foresight ? 'Foresight' : '', o.length === 'short' ? 'Short game' : ''].filter(Boolean).join(' · ');
@@ -159,13 +129,9 @@
 
   function scoreTable(v) {
     const rows = [];
-    const totals = v.players.map(() => 0);
     for (const h of v.history) {
       const cells = h.rows
-        .map((r, i) => {
-          totals[i] = r.score;
-          return `<td class="${i === v.me ? 'me-col' : ''}"><b class="${r.delta >= 0 ? 'pos' : 'neg'}">${r.score}</b><small>${r.bid}/${r.tricks}</small></td>`;
-        })
+        .map((r, i) => `<td class="${i === v.me ? 'me-col' : ''}"><b class="${r.delta >= 0 ? 'pos' : 'neg'}">${r.score}</b><small>${r.bid}/${r.tricks}</small></td>`)
         .join('');
       rows.push(`<tr><td>R${h.round}</td>${cells}</tr>`);
     }
@@ -233,15 +199,15 @@
     const scroll = handEl ? handEl.scrollLeft : 0;
     const z = sizes(v);
     const canPlay = v.phase === 'playing' && v.myTurn && ui.selected;
+    const trump = v.trumpSuit ? suitPill(v.trumpSuit) : '<b>No trump</b>';
     root.innerHTML = `
-    <div class="wz" style="--cw:${z.cw}px">
+    <div class="wz" style="--cw:${z.cw}px;--tcw:${z.tcw}px;--cw0:${z.cw}px">
       <div class="wz-top">
         <div class="wz-round"><b>Round ${v.round}</b><span class="label"> / ${v.totalRounds}</span></div>
-        <div class="wz-trump">${trumpHTML(v)}</div>
-        <div class="row" style="gap:6px"><button class="btn ghost small" data-wz="scores">Scores</button><button class="btn ghost small" data-wz="leave" aria-label="Leave table">✕</button></div>
+        <div class="wz-trump">${v.phase === 'chooseTrump' ? '<span class="label">Trump: dealer picks</span>' : `<span class="label">Trump</span> ${trump}`}</div>
+        <div class="row" style="gap:6px">${CardTable.sound.button()}<button class="btn ghost small" data-act="emotes" aria-label="Send a reaction">😀</button><button class="btn ghost small" data-wz="scores">Scores</button><button class="btn ghost small" data-wz="leave" aria-label="Leave table">✕</button></div>
       </div>
-      <div class="wz-players">${playersHTML(v)}</div>
-      <div class="wz-table">${trickHTML(v, z)}</div>
+      ${tableHTML(v, ctx, z)}
       <div class="wz-status ${v.myTurn ? 'mine' : ''}"><span>${statusText(v)}</span>${canPlay ? '<button class="btn small" data-wz="play">Play</button>' : ''}</div>
       ${controlsHTML(v)}
       <div class="hand"><div class="hand-in">${handHTML(v, z)}</div></div>
@@ -320,7 +286,7 @@
     }
   }
 
-  window.addEventListener('resize', () => { if (ui.ctx && ui.latest && document.querySelector('.wz')) ui.ctx.rerender(); });
+  window.addEventListener('resize', () => { if (ui.ctx && ui.latest && ui.latest.game === 'wizard' && document.querySelector('.wz')) ui.ctx.rerender(); });
 
   window.CardTable.register('wizard', { render });
 })();

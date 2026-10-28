@@ -44,5 +44,3 @@ Behaviour worth knowing: a dropped player is replaced by a bot after 15 s and ca
 ## Wizard rules implemented
 
 60 cards (4 suits × 1–13, 4 Wizards, 4 Jesters). Round *n* deals *n* cards; the next card sets trump (Wizard: dealer chooses; Jester or last round: no trump). Bid exact tricks; follow suit (Wizards/Jesters always playable); first Wizard wins, else highest trump, else highest of the led suit. Score: exact = 20 + 10 per trick, otherwise −10 per trick off. Optional house rule: dealer can't make bids total the number of tricks.
-
-# game

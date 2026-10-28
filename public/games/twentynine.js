@@ -1,7 +1,7 @@
 /* 29 table renderer. Shares table.css with Wizard. */
 (() => {
   'use strict';
-  const { esc, toast } = window.CardTable;
+  const { esc, toast, pt } = window.CardTable;
 
   // 4-colour suits: the CSS classes suit-R/Y/G/B are shared with Wizard.
   const SUITS = {
@@ -26,11 +26,12 @@
     const h = window.innerHeight;
     let cw = w < 480 ? 62 : w < 900 ? 78 : 90;
     if (h < 620) cw = Math.min(cw, 56);
+    const tcw = w < 480 ? 50 : w < 900 ? 62 : 76;
     const n = v.hand.length;
     const avail = Math.min(w, 980) - 20;
     let overlap = -6;
     if (n > 1 && n * cw + (n - 1) * 6 > avail) overlap = Math.round(cw - Math.max((avail - cw) / (n - 1), cw * 0.34));
-    return { cw, overlap };
+    return { cw, tcw, overlap };
   }
 
   function relation(v, i) {
@@ -49,9 +50,9 @@
         if (v.myTurn) {
           if (v.canReveal) return 'You can’t follow suit. Show the trump, or discard.';
           if (v.mustTrump) return 'Trump is shown. Play a trump card.';
-          return ui.selected ? 'Tap the card again, or press Play' : 'Your turn. Pick a card.';
+          return wonPrefix(v) + (ui.selected ? 'Tap the card again, or press Play' : 'Your turn. Pick a card.');
         }
-        return `${name(v.turn)} is playing…`;
+        return wonPrefix(v) + `${name(v.turn)} is playing…`;
       case 'handEnd':
         return 'Hand complete';
       default:
@@ -76,40 +77,43 @@
     </div>`;
   }
 
-  function playersHTML(v) {
-    const order = [];
-    for (let k = 0; k < 4; k++) order.push((Math.max(v.me, 0) + k) % 4);
-    return order
-      .map((i) => {
-        const p = v.players[i];
-        const turn = v.turn === i;
-        const b = v.bids[i];
-        const line = v.phase === 'bidding' ? (b === null ? (turn ? 'bidding…' : 'waiting') : b === 'pass' ? 'passed' : `bid ${b}`) : v.highBidder === i ? `bidder · ${v.highBid}` : relation(v, i);
-        return `<div class="chip t${teamOf(i) === teamOf(v.me) ? 'us' : 'them'} ${turn ? 'turn' : ''} ${i === v.me ? 'me' : ''}">
-          <div class="nm">${esc(p.name)}${i === v.me ? ' (you)' : ''}${i === v.dealer ? '<span class="dbadge" title="Dealer">D</span>' : ''}</div>
-          <div class="st">${esc(line)}</div>
-          <div class="sc">${v.phase === 'bidding' ? relation(v, i) : p.cards + ' cards'}</div>
-        </div>`;
-      })
-      .join('');
+  function seatHTML(v, ctx, i) {
+    const p = v.players[i];
+    const turn = v.turn === i;
+    const b = v.bids[i];
+    const sub = v.phase === 'bidding' ? (b === null ? (turn ? 'bidding…' : 'waiting') : b === 'pass' ? 'passed' : `bid ${b}`) : v.highBidder === i ? `bidder · ${v.highBid}` : relation(v, i);
+    return pt.seatHTML({ pid: p.id, name: p.name, avatar: pt.avatarOf(ctx.room, p.id), sub, turn, dealer: i === v.dealer, first: i === (v.dealer + 1) % 4, me: i === v.me, team: teamOf(i) === teamOf(v.me) ? 0 : 1 });
   }
 
-  function trickHTML(v) {
+  function cornerHTML(v) {
+    let h;
+    if (v.trumpSuit) h = `Trump${v.trumpRevealed ? '' : ' (secret)'}<br>${suitPill(v.trumpSuit)}`;
+    else if (v.trumpSet) h = 'Trump<br><b>🔒 hidden</b>';
+    else h = v.phase === 'bidding' ? 'Bidding…' : 'Choosing trump…';
+    if (v.highBidder >= 0 && v.phase !== 'bidding') h += `<br>Bid <b>${v.highBid}</b> · ${esc(v.players[v.highBidder].name)}`;
+    return `<div class="cap">${h}</div>`;
+  }
+
+  const wonPrefix = (v) =>
+    v.phase === 'playing' && !v.trick.length && v.lastTrick
+      ? `${esc(v.players[v.lastTrick.winner].name)} won${v.lastTrick.points ? ' ' + v.lastTrick.points + ' pt' + (v.lastTrick.points > 1 ? 's' : '') : ' the trick'}. `
+      : '';
+
+  function tableHTML(v, ctx) {
     const live = v.trick.length > 0;
     const shown = live ? v.trick : v.lastTrick ? v.lastTrick.cards : [];
+    const winner = !live && v.lastTrick ? v.lastTrick.winner : -1;
     const ids = new Set(shown.map((t) => t.card.id));
-    let html;
-    if (!shown.length) {
-      const msg = v.phase === 'bidding' ? 'Bidding: highest bid picks the trump' : v.phase === 'chooseTrump' ? 'Waiting for trump…' : 'Lead the first card';
-      html = `<div class="hint">${esc(msg)}</div>`;
-    } else {
-      const winner = !live && v.lastTrick ? v.lastTrick.winner : -1;
-      const cards = shown
-        .map((t) => `<div class="tslot ${t.player === winner ? 'win' : ''}">${cardHTML(t.card, { cls: live && !ui.prevTrick.has(t.card.id) ? 'pop' : '' })}<span class="who">${esc(v.players[t.player].name)}</span></div>`)
-        .join('');
-      const cap = !live && v.lastTrick ? `<div class="hint">${esc(v.players[v.lastTrick.winner].name)} won the trick${v.lastTrick.points ? ` · ${v.lastTrick.points} point${v.lastTrick.points > 1 ? 's' : ''}` : ''}</div>` : '';
-      html = `${cap}<div class="trick">${cards}</div>`;
-    }
+    const html = pt.tableHTML({
+      n: 4,
+      me: v.me,
+      seat: (i) => seatHTML(v, ctx, i),
+      card: (i) => {
+        const t = shown.find((x) => x.player === i);
+        return t ? { html: cardHTML(t.card, { cls: live && !ui.prevTrick.has(t.card.id) ? 'pop' : '' }), win: i === winner } : null;
+      },
+      corner: cornerHTML(v),
+    });
     ui.prevTrick = ids;
     return html;
   }
@@ -203,15 +207,14 @@
     const z = sizes(v);
     const canPlay = v.phase === 'playing' && v.myTurn && ui.selected;
     root.innerHTML = `
-    <div class="wz t29" style="--cw:${z.cw}px">
+    <div class="wz t29" style="--cw:${z.cw}px;--tcw:${z.tcw}px;--cw0:${z.cw}px">
       <div class="wz-top">
         <div class="wz-round"><b>Hand ${v.handNo}</b><span class="label"> · to ${v.options.target}</span></div>
         <div class="wz-trump">${trumpHTML(v)}</div>
-        <div class="row" style="gap:6px"><button class="btn ghost small" data-t9="scores">Scores</button><button class="btn ghost small" data-t9="leave" aria-label="Leave table">✕</button></div>
+        <div class="row" style="gap:6px">${CardTable.sound.button()}<button class="btn ghost small" data-act="emotes" aria-label="Send a reaction">😀</button><button class="btn ghost small" data-t9="scores">Scores</button><button class="btn ghost small" data-t9="leave" aria-label="Leave table">✕</button></div>
       </div>
       ${scoreStrip(v)}
-      <div class="wz-players four">${playersHTML(v)}</div>
-      <div class="wz-table">${trickHTML(v)}</div>
+      ${tableHTML(v, ctx)}
       <div class="wz-status ${v.myTurn ? 'mine' : ''}"><span>${statusText(v)}</span>
         ${v.canReveal ? '<button class="btn small" data-t9="reveal">Show trump</button>' : ''}
         ${canPlay ? '<button class="btn small" data-t9="play">Play</button>' : ''}</div>

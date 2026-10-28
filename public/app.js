@@ -21,6 +21,11 @@
     view: null,
     ready: false,
     draftCode: '',
+    avatar: store.get('ct_avatar') || '',
+    avatars: [],
+    emotes: [],
+    named: !!store.get('ct_name'),
+    invite: '',
   };
   const plugins = {};
   let ws = null;
@@ -36,7 +41,7 @@
     setTimeout(() => el.remove(), 3200);
   }
 
-  window.CardTable = { esc, toast, register: (id, p) => { plugins[id] = p; } };
+  window.CardTable = Object.assign(window.CardTable || {}, { esc, toast, register: (id, p) => { plugins[id] = p; } });
 
   const gameMeta = (id) => S.games.find((g) => g.id === id);
   const inviteUrl = () => `${location.origin}/#${S.room.code}`;
@@ -72,7 +77,7 @@
     ws.onopen = () => {
       retry = 0;
       $banner.hidden = true;
-      send({ t: 'hello', token: S.token || undefined, name: S.name || undefined });
+      send({ t: 'hello', token: S.token || undefined, name: S.name || undefined, avatar: S.avatar || undefined });
     };
     ws.onmessage = (e) => {
       let m;
@@ -106,18 +111,31 @@
         S.id = m.id;
         S.token = m.token;
         S.games = m.games;
+        S.avatars = m.avatars || [];
+        S.emotes = m.emotes || [];
         if (!S.name) S.name = m.name;
+        if (!S.avatar) S.avatar = m.avatar;
         store.set('ct_token', m.token);
         S.ready = true;
         const code = hashCode();
-        if (code) send({ t: 'join', code, name: S.name });
+        if (code && !S.room) {
+          if (S.named) send({ t: 'join', code, name: S.name, avatar: S.avatar });
+          else S.invite = code; // first visit via an invite link: ask for a name before joining
+        }
         render();
         break;
       }
+      case 'emote':
+        showEmote(m.id, m.e);
+        CardTable.sound.play('emote');
+        break;
       case 'state': {
         S.room = m.room;
         S.view = m.view;
+        S.invite = '';
         setHash(m.room.code);
+        soundsFor(prevView, m.view);
+        prevView = m.view;
         const mine = !!(m.view && m.view.myTurn);
         if (mine && !wasMyTurn) {
           try { navigator.vibrate && navigator.vibrate(70); } catch { /* ignore */ }
@@ -149,15 +167,101 @@
     for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) % 360;
     return `hsl(${h} 55% 42%)`;
   };
-  const avatar = (name, bot) => `<span class="avatar" style="background:${avatarColor(name)}">${bot ? '🤖' : esc([...name][0] || '?').toUpperCase()}</span>`;
+  const initial = (name) => esc([...name][0] || '?').toUpperCase();
+  const avatar = (m) => `<span class="avatar" style="background:${avatarColor(m.name)}">${m.avatar ? esc(m.avatar) : initial(m.name)}</span>`;
+
+  function profileHTML() {
+    const picks = S.avatars
+      .map((a) => `<button type="button" class="av-pick ${a === S.avatar ? 'on' : ''}" data-act="avatar" data-a="${esc(a)}" aria-label="Avatar ${esc(a)}" aria-pressed="${a === S.avatar}">${esc(a)}</button>`)
+      .join('');
+    return `<div class="profile">
+      <label class="label" for="name">Your name</label>
+      <input id="name" type="text" maxlength="20" autocomplete="nickname" placeholder="Type your name" value="${esc(S.named ? S.name : '')}">
+      <div class="label" style="margin-top:10px">Your avatar</div>
+      <div class="av-picks">${picks}</div>
+    </div>`;
+  }
+
+  let prevView = null;
+  const bidSig = (v) => JSON.stringify(v.bids || (v.players || []).map((p) => (p.bid !== undefined && p.bid !== null ? p.bid : p.hasBid ? 1 : null)));
+  /** Play a sound for whatever changed between two game views. */
+  function soundsFor(a, b) {
+    const snd = CardTable.sound;
+    if (!b || !snd) return;
+    if (!a || a.phase === undefined) return;
+    if (b.phase === 'gameOver' && a.phase !== 'gameOver') return snd.play('fanfare');
+    if ((b.phase === 'roundEnd' || b.phase === 'handEnd') && a.phase !== b.phase) return snd.play('round');
+    if (b.lastTrick && (!a.lastTrick || JSON.stringify(a.lastTrick) !== JSON.stringify(b.lastTrick)) && b.trick && !b.trick.length) {
+      snd.play(b.lastTrick.winner === b.me ? 'win' : 'card');
+    } else if (b.trick && a.trick && b.trick.length > a.trick.length) snd.play('card');
+    else if (b.phase === 'bidding' && bidSig(a) !== bidSig(b)) snd.play('tick');
+    else if (a.phase !== b.phase && (b.phase === 'bidding' || b.phase === 'playing') && !(b.trick && b.trick.length)) snd.play('deal');
+    if (b.myTurn && !a.myTurn) setTimeout(() => snd.play('turn'), 220);
+  }
+
+  function showEmote(id, e) {
+    const seat = document.querySelector(`[data-pid="${CSS.escape(id)}"] .av`);
+    const r = seat ? seat.getBoundingClientRect() : { left: innerWidth / 2, top: 80, width: 0, height: 0 };
+    const el = document.createElement('div');
+    el.className = 'emote-pop';
+    el.textContent = e;
+    el.style.left = r.left + r.width / 2 + 'px';
+    el.style.top = r.top + r.height / 2 + 'px';
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 2500);
+  }
+
+  function toggleEmoteBar() {
+    const old = document.getElementById('emote-bar');
+    if (old) return old.remove();
+    const bar = document.createElement('div');
+    bar.id = 'emote-bar';
+    bar.className = 'emote-bar';
+    bar.innerHTML = S.emotes.map((e) => `<button type="button" data-e="${esc(e)}" aria-label="Send ${esc(e)}">${esc(e)}</button>`).join('');
+    bar.addEventListener('click', (ev) => {
+      const b = ev.target.closest('[data-e]');
+      if (b) { send({ t: 'emote', e: b.dataset.e }); bar.remove(); }
+    });
+    document.body.appendChild(bar);
+    setTimeout(() => document.addEventListener('click', function close(ev) {
+      if (!bar.contains(ev.target)) { bar.remove(); document.removeEventListener('click', close); }
+      else if (!bar.isConnected) document.removeEventListener('click', close);
+    }), 0);
+  }
+
   const range = (s) => (s.min === s.max ? `${s.min} players` : `${s.min}–${s.max} players`);
 
   function render() {
+    // keep the cursor in the name box when the screen is redrawn (e.g. someone joins while you type)
+    const ae = document.activeElement;
+    const keep = ae && ae.id === 'name' ? { start: ae.selectionStart, end: ae.selectionEnd } : null;
     if (!S.ready && !S.room) {
       $app.innerHTML = '<div class="page"><div class="brand"><div class="mark">🂡</div><h1>Card Table</h1><p>Connecting…</p></div></div>';
-    } else if (!S.room) renderHome();
+    } else if (!S.room && S.invite) renderInvite();
+    else if (!S.room) renderHome();
     else if (S.room.status === 'lobby') renderLobby();
     else renderGame();
+    if (keep) {
+      const el = document.getElementById('name');
+      if (el) {
+        el.focus();
+        try { el.setSelectionRange(keep.start, keep.end); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  function renderInvite() {
+    $app.innerHTML = `
+    <main class="page">
+      <header class="brand"><span class="brand-snd">${CardTable.sound.button()}</span>
+        <div class="mark">🂡</div>
+        <h1>You’re invited!</h1>
+        <p>Join table <b class="code-inline">${esc(S.invite)}</b> on Card Table. Pick a name and an avatar so your friends know who you are.</p>
+      </header>
+      <section class="panel">${profileHTML()}</section>
+      <button class="btn big" data-act="joinInvite">Join table ${esc(S.invite)}</button>
+      <button class="btn ghost" data-act="cancelInvite">Not now</button>
+    </main>`;
   }
 
   function renderHome() {
@@ -180,16 +284,13 @@
       .join('');
     $app.innerHTML = `
     <main class="page wide">
-      <header class="brand">
+      <header class="brand"><span class="brand-snd">${CardTable.sound.button()}</span>
         <div class="mark">🂡</div>
         <h1>Card Table</h1>
         <p>Card and board games with friends, right in your browser. Phone or desktop, nothing to install.</p>
       </header>
       <div class="home-grid">
-        <section class="panel">
-          <label class="label" for="name">Your name</label>
-          <input id="name" type="text" maxlength="20" autocomplete="nickname" value="${esc(S.name)}">
-        </section>
+        <section class="panel">${profileHTML()}</section>
         <section class="panel">
           <label class="label" for="code">Have a code? Join a table</label>
           <form class="join-form" id="joinForm">
@@ -228,7 +329,7 @@
       if (m) {
         seats.push(`
       <li class="seat">
-        ${avatar(m.name, m.bot)}
+        ${avatar(m)}
         <span class="nm">${esc(m.name)}${m.id === S.id ? ' <em>(you)</em>' : ''}</span>
         ${label}
         ${m.id === r.hostId ? '<span class="tag host">host</span>' : ''}
@@ -264,6 +365,7 @@
           ${navigator.share ? '<button class="btn ghost small" data-act="share">Share…</button>' : ''}
         </div>
       </section>
+      <section class="panel">${profileHTML()}</section>
       <section class="panel">
         <div class="row" style="justify-content:space-between">
           <h3>Players <span class="label">${n} joined</span></h3>
@@ -305,7 +407,25 @@
 
   // ------------------------------------------------------------ events
   const actions = {
-    create: (el) => send({ t: 'create', gameId: el.dataset.game, name: S.name || undefined }),
+    avatar: (el) => {
+      S.avatar = el.dataset.a;
+      store.set('ct_avatar', S.avatar);
+      send({ t: 'setName', name: S.name || undefined, avatar: S.avatar });
+      render();
+    },
+    emotes: () => toggleEmoteBar(),
+    sound: () => { CardTable.sound.toggle(); render(); },
+    joinInvite: () => {
+      if (!S.named || !S.name) return toast('Please type your name first');
+      store.set('ct_name', S.name);
+      send({ t: 'join', code: S.invite, name: S.name, avatar: S.avatar });
+    },
+    cancelInvite: () => {
+      S.invite = '';
+      setHash('');
+      render();
+    },
+    create: (el) => send({ t: 'create', gameId: el.dataset.game, name: S.name || undefined, avatar: S.avatar || undefined }),
     leave: () => send({ t: 'leave' }),
     rules: (el) => showRules(el.dataset.game),
     addBot: () => send({ t: 'addBot' }),
@@ -340,9 +460,10 @@
   $app.addEventListener('input', (e) => {
     if (e.target.id === 'name') {
       S.name = e.target.value.trim().slice(0, 20);
-      store.set('ct_name', S.name);
+      S.named = !!S.name;
+      if (S.name) store.set('ct_name', S.name);
       clearTimeout(nameTimer);
-      nameTimer = setTimeout(() => S.name && send({ t: 'setName', name: S.name }), 400);
+      nameTimer = setTimeout(() => S.name && send({ t: 'setName', name: S.name, avatar: S.avatar || undefined }), 400);
     } else if (e.target.id === 'code') {
       e.target.value = e.target.value.toUpperCase().replace(/[^A-Z]/g, '');
       S.draftCode = e.target.value;
@@ -358,7 +479,7 @@
   $app.addEventListener('submit', (e) => {
     if (e.target.id === 'joinForm') {
       e.preventDefault();
-      if (S.draftCode.length === 4) send({ t: 'join', code: S.draftCode, name: S.name || undefined });
+      if (S.draftCode.length === 4) send({ t: 'join', code: S.draftCode, name: S.name || undefined, avatar: S.avatar || undefined });
       else toast('Enter the 4-letter table code');
     }
   });

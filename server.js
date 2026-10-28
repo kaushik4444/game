@@ -26,6 +26,9 @@ const SECURITY_HEADERS = {
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I / O
 const BOT_NAMES = ['Merlin', 'Morgana', 'Gandalf', 'Circe', 'Rincewind', 'Radagast', 'Elminster', 'Oz'];
 const MAX_ROOMS = 500;
+const AVATARS = ['🧙', '🧝', '🧛', '🧞', '🦊', '🐺', '🦉', '🐉', '🦄', '🐙', '🐸', '🦁', '🐼', '🐯', '🦅', '🐲'];
+const EMOTES = ['👍', '👏', '😂', '😮', '😡', '🤔', '🔥', '😎'];
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
 const rand = (a, b) => a + Math.random() * (b - a);
 const cleanName = (s) => (typeof s === 'string' ? s.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 20) : '');
@@ -102,7 +105,7 @@ function start(opts = {}) {
       min: def.seats.min,
       max: def.seats.max,
       seatLabels: def.seatLabel ? Array.from({ length: room.seats }, (_, i) => def.seatLabel(i, room.seats)) : null,
-      members: room.members.map((m) => ({ id: m.id, name: m.name, bot: m.bot, connected: isConnected(m) })),
+      members: room.members.map((m) => ({ id: m.id, name: m.name, bot: m.bot, avatar: m.avatar, connected: isConnected(m) })),
     };
   }
 
@@ -196,21 +199,33 @@ function start(opts = {}) {
   }
 
   function addMember(room, p) {
-    room.members.push({ id: p.id, name: p.name, bot: false });
+    room.members.push({ id: p.id, name: p.name, avatar: p.avatar, bot: false });
     p.room = room.code;
   }
 
   // ------------------------------------------------------------ message handlers
   const handlers = {
     setName(p, msg) {
-      const name = cleanName(msg.name);
-      if (!name) return;
-      p.name = name;
+      applyProfile(p, msg);
       const room = rooms.get(p.room);
-      if (room && room.status !== 'playing') {
-        const m = room.members.find((x) => x.id === p.id);
-        if (m) m.name = name;
-        broadcast(room);
+      if (!room) return;
+      const m = room.members.find((x) => x.id === p.id);
+      if (m) {
+        m.avatar = p.avatar;
+        if (room.status !== 'playing') m.name = p.name;
+      }
+      broadcast(room);
+    },
+
+    emote(p, msg) {
+      const room = rooms.get(p.room);
+      if (!room || room.status === 'lobby' || !EMOTES.includes(msg.e)) return;
+      const now = Date.now();
+      if (now - (p.lastEmote || 0) < 700) return;
+      p.lastEmote = now;
+      for (const m of humans(room)) {
+        const q = players.get(m.id);
+        if (q && q.connected) send(q.ws, { t: 'emote', id: p.id, e: msg.e });
       }
     },
 
@@ -218,7 +233,7 @@ function start(opts = {}) {
       const def = games.get(msg.gameId);
       if (!def) return sendError(p, 'Unknown game');
       if (rooms.size >= MAX_ROOMS) return sendError(p, 'Server is full, try again later');
-      if (msg.name) p.name = cleanName(msg.name) || p.name;
+      applyProfile(p, msg);
       if (p.room) leaveRoom(p);
       const room = { code: newCode(), gameId: def.id, hostId: p.id, status: 'lobby', seats: def.seats.default, options: sanitizeOptions(def, {}), members: [], game: null, timer: null };
       rooms.set(room.code, room);
@@ -229,7 +244,7 @@ function start(opts = {}) {
     join(p, msg) {
       const code = typeof msg.code === 'string' ? msg.code.trim().toUpperCase() : '';
       const room = rooms.get(code);
-      if (msg.name) p.name = cleanName(msg.name) || p.name;
+      applyProfile(p, msg);
       if (!room) return sendError(p, `No table with code ${code || '?'}`);
       if (p.room === code && room.members.some((m) => m.id === p.id)) return broadcast(room);
       if (room.status !== 'lobby') return sendError(p, 'That game has already started');
@@ -320,7 +335,15 @@ function start(opts = {}) {
   function addBotTo(room) {
     const used = new Set(room.members.map((m) => m.name));
     const name = BOT_NAMES.find((n) => !used.has(n)) || 'Bot ' + (room.members.length + 1);
-    room.members.push({ id: 'bot_' + crypto.randomBytes(4).toString('hex'), name, bot: true });
+    const usedAv = new Set(room.members.map((m) => m.avatar));
+    const avatar = pick(AVATARS.filter((a) => !usedAv.has(a)).concat(AVATARS.slice(0, 1)));
+    room.members.push({ id: 'bot_' + crypto.randomBytes(4).toString('hex'), name, avatar, bot: true });
+  }
+
+  function applyProfile(p, msg) {
+    const name = cleanName(msg.name);
+    if (name) p.name = name;
+    if (AVATARS.includes(msg.avatar)) p.avatar = msg.avatar;
   }
 
   function hostRoom(p, status) {
@@ -351,6 +374,7 @@ function start(opts = {}) {
         id: 'p_' + crypto.randomBytes(6).toString('hex'),
         token: crypto.randomBytes(16).toString('hex'),
         name: 'Guest ' + (100 + crypto.randomInt(900)),
+        avatar: pick(AVATARS),
         room: null,
         ws: null,
         connected: false,
@@ -366,9 +390,8 @@ function start(opts = {}) {
     p.ws = ws;
     p.connected = true;
     ws.player = p;
-    const name = cleanName(msg.name);
-    if (name) p.name = name;
-    send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, games: games.list() });
+    applyProfile(p, msg);
+    send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list() });
     const room = rooms.get(p.room);
     if (room) {
       broadcast(room);
