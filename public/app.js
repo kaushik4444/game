@@ -203,10 +203,22 @@
     const picks = S.avatars
       .map((a) => `<button type="button" class="av-pick ${a === S.avatar ? 'on' : ''}" data-act="avatar" data-a="${esc(a)}" aria-label="Avatar ${esc(a)}" aria-pressed="${a === S.avatar}">${esc(a)}</button>`)
       .join('');
+    const myName = S.named ? S.name : '';
+    const initialChar = myName ? esc([...myName][0] || '?').toUpperCase() : '★';
+    const previewBg = myName ? avatarColor(myName) : 'hsl(260 55% 42%)';
     return `<div class="profile">
+      <div class="profile-header">
+        <div class="profile-preview">
+          <span class="avatar big" style="background:${previewBg}">${S.avatar ? esc(S.avatar) : initialChar}</span>
+          <div class="profile-meta">
+            <span class="profile-welcome">${myName ? `Playing as <b>${esc(myName)}</b>` : 'Choose your player persona'}</span>
+            <span class="profile-hint">Seen by friends at the table</span>
+          </div>
+        </div>
+      </div>
       <label class="label" for="name">Your name</label>
-      <input id="name" type="text" maxlength="20" autocomplete="nickname" placeholder="Type your name" value="${esc(S.named ? S.name : '')}">
-      <div class="label" style="margin-top:10px">Your avatar</div>
+      <input id="name" type="text" maxlength="20" autocomplete="nickname" placeholder="Type your nickname" value="${esc(myName)}">
+      <div class="label" style="margin-top:12px">Choose your avatar</div>
       <div class="av-picks">${picks}</div>
     </div>`;
   }
@@ -402,10 +414,17 @@
       <article class="panel game-tile" style="--accent:${esc(g.accent || '#7b4bd0')}">
         <div class="game-art" aria-hidden="true">${esc(g.icon || '🎴')}</div>
         <div class="game-body">
-          <h3>${esc(g.name)}</h3>
+          <div class="game-header">
+            <h3>${esc(g.name)}</h3>
+            <span class="game-badge">${range(g.seats)}</span>
+          </div>
           <p>${esc(g.tagline)}</p>
-          <div class="meta">${range(g.seats)} · bots can fill seats</div>
-          <div class="row">
+          <div class="game-meta-tags">
+            <span class="meta-pill">🤖 AI Bots fill seats</span>
+            <span class="meta-pill">⚡ Instant join</span>
+            <span class="meta-pill">💬 Live chat</span>
+          </div>
+          <div class="row game-actions">
             <button class="btn" data-act="create" data-game="${esc(g.id)}">Create a table</button>
             <button class="btn ghost" data-act="rules" data-game="${esc(g.id)}">How to play</button>
           </div>
@@ -414,25 +433,47 @@
       )
       .join('');
     $app.innerHTML = `
-    <main class="page wide">
-      <header class="brand"><span class="brand-snd">${CardTable.sound.button()}</span>
+    <main class="page wide home-arena">
+      <header class="brand">
+        <span class="brand-snd">${CardTable.sound.button()}</span>
+        <div class="arena-tag">⚔️ MULTIPLAYER ARENA</div>
         <div class="mark">🂡</div>
         <h1>Card Table</h1>
-        <p>Card and board games with friends, right in your browser. Phone or desktop, nothing to install.</p>
+        <p class="brand-desc">Real-time card and board games with friends. Instant rooms, smart bots, authentic gameplay — right in your browser.</p>
+        <div class="arena-features">
+          <span class="feat-badge">✨ No app install required</span>
+          <span class="feat-badge">📱 Mobile & desktop ready</span>
+          <span class="feat-badge">🛡️ Fair hidden-state deals</span>
+        </div>
       </header>
       <div class="home-grid">
-        <section class="panel">${profileHTML()}</section>
-        <section class="panel">
-          <label class="label" for="code">Have a code? Join a table</label>
+        <section class="panel profile-panel">
+          <div class="panel-tag">PLAYER IDENTITY</div>
+          ${profileHTML()}
+        </section>
+        <section class="panel join-panel">
+          <div class="panel-tag">QUICK ACCESS</div>
+          <label class="label" for="code">Have a table code? Jump in</label>
+          <p class="join-sub">Enter the 4-letter code shared by your friend to join their game table immediately.</p>
           <form class="join-form" id="joinForm">
             <input id="code" type="text" maxlength="4" placeholder="ABCD" autocomplete="off" autocapitalize="characters" spellcheck="false" value="${esc(S.draftCode)}">
-            <button class="btn" type="submit">Join</button>
+            <button class="btn big-join" type="submit">Join Table</button>
           </form>
+          <div class="join-tips">💡 Anyone can also join via direct link: <code>site/#CODE</code></div>
         </section>
       </div>
-      <h2 class="section">Choose a game</h2>
+      <div class="section-head">
+        <h2 class="section">Featured Games</h2>
+        <span class="section-sub">Pick a card game and host a private table for your friends</span>
+      </div>
       <section class="game-grid">${tiles}</section>
-      <p class="foot">More games are on the way.</p>
+      <div class="roadmap-box panel">
+        <span class="roadmap-icon">🧭</span>
+        <div>
+          <b>More arena games coming soon:</b>
+          <p>Poker (Texas Hold'em), The Mind, and Saboteur are actively in development!</p>
+        </div>
+      </div>
     </main>`;
   }
 

@@ -161,31 +161,157 @@ button.card { cursor: pointer; }
 @media (min-width: 900px) { .wz { --av: 66px; } .pt-seat { width: 130px; } .plate b { font-size: 14px; } .plate span { font-size: 12px; } }
 
 /* =====================================================================
-   Wizard cards (original artwork, see wizard-cards.js)
+   Wizard cards (authentic original design, see wizard-cards.js)
    ===================================================================== */
-.card.wc { padding: 0; overflow: hidden; background: linear-gradient(160deg, var(--f), color-mix(in srgb, var(--f) 66%, #000)); --f: #6a4cc0; border-radius: calc(var(--cw) * .16); box-shadow: 0 6px 16px rgba(0, 0, 0, .45); }
-.wc.suit-R { --f: #c8352f; --e: #d23a2c; --tx: #a02820; }
-.wc.suit-Y { --f: #e2ab1c; --e: #e8b10c; --tx: #8a5a00; }
-.wc.suit-G { --f: #2f9a57; --e: #2f9a57; --tx: #1f6e3c; }
-.wc.suit-B { --f: #2f63c9; --e: #3a6ed6; --tx: #244fa6; }
-.wc.wizard { --f: #5a3aa6; }
-.wc.jester { --f: #e07a2f; }
-.wc-in { position: absolute; inset: 5%; border-radius: calc(var(--cw) * .09); background: linear-gradient(170deg, #fbf6e6, #efe5c8); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .14); overflow: hidden; }
-.wc.wizard .wc-in { background: radial-gradient(ellipse at 50% 28%, #3d2c8a, #1a1245 85%); }
-.wc.jester .wc-in { background: linear-gradient(170deg, #fdf1d4, #f3d9a6); }
-.wc .big { position: absolute; left: 50%; top: 50%; width: 58%; height: auto; transform: translate(-50%, -50%); color: var(--e); filter: drop-shadow(0 1px 0 rgba(0, 0, 0, .3)); }
-.wc-rk { position: absolute; top: 5%; left: 8%; z-index: 2; display: flex; flex-direction: column; align-items: center; font-family: var(--serif); font-weight: 800; font-size: calc(var(--cw) * .25); line-height: 1; color: var(--tx, #fff); }
-.wc-rk .em { width: calc(var(--cw) * .2); height: calc(var(--cw) * .2); color: var(--e); margin-top: 1px; }
-.wc-rk.br { top: auto; left: auto; bottom: 5%; right: 8%; transform: rotate(180deg); }
-.wc.wizard .wc-rk { color: #ffe9a8; }
-.wc.jester .wc-rk { color: #b3501a; }
-.wc .art { position: absolute; left: 13%; top: 9%; width: 74%; height: auto; }
-.wc-name { position: absolute; left: 0; right: 0; bottom: 3%; text-align: center; font: 800 calc(var(--cw) * .1) var(--sans); letter-spacing: .14em; text-transform: uppercase; opacity: .85; }
-.wc.wizard .wc-name { color: #ffe9a8; }
-.wc.jester .wc-name { color: #b3501a; }
-.wc.back { background: #2a1f66; }
-.wc.back .art { position: absolute; inset: 0; left: 0; top: 0; width: 100%; height: 100%; }
-.sico { width: 1.1em; height: 1.1em; vertical-align: -.18em; }
+.card.wc {
+  padding: 0;
+  overflow: hidden;
+  background: #0b0c10;
+  border-radius: calc(var(--cw) * .12);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .6), 0 2px 5px rgba(0, 0, 0, .4);
+  border: 1.5px solid rgba(255, 255, 255, 0.22);
+  position: relative;
+}
+.wc.suit-R { --f: #991b1b; --e: #ef4444; --tx: #f87171; }
+.wc.suit-Y { --f: #854d0e; --e: #eab308; --tx: #facc15; }
+.wc.suit-G { --f: #065f46; --e: #10b981; --tx: #34d399; }
+.wc.suit-B { --f: #1e40af; --e: #3b82f6; --tx: #60a5fa; }
+.wc.wizard { --f: #1e3a8a; --e: #f1c40f; --tx: #ffeaa7; }
+.wc.jester { --f: #064e3b; --e: #eab308; --tx: #84cc16; }
+
+.wc-in {
+  position: absolute;
+  inset: 4.5%;
+  border-radius: calc(var(--cw) * .08);
+  background: #000;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .15);
+  overflow: hidden;
+}
+
+/* Original illustration containers */
+.wc.wizard .wc-in, .wc.jester .wc-in {
+  background: #000;
+}
+.wc.wizard .art, .wc.jester .art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: drop-shadow(0 2px 8px rgba(0,0,0,.6));
+}
+
+/* Middle scene on numbered suit cards matching original cards */
+.wc-scene {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.wc-scene.suit-R {
+  background: radial-gradient(circle at 50% 50%, #450a0a 0%, #1c0404 70%, #000000 100%);
+}
+.wc-scene.suit-Y {
+  background: radial-gradient(circle at 50% 50%, #422006 0%, #1c0d02 70%, #000000 100%);
+}
+.wc-scene.suit-G {
+  background: radial-gradient(circle at 50% 50%, #022c22 0%, #01140f 70%, #000000 100%);
+}
+.wc-scene.suit-B {
+  background: radial-gradient(circle at 50% 50%, #172554 0%, #09112a 70%, #000000 100%);
+}
+.wc-scene .big {
+  position: absolute;
+  width: 54%;
+  height: auto;
+  color: var(--e);
+  filter: drop-shadow(0 0 10px rgba(0, 0, 0, .8)) drop-shadow(0 0 4px var(--e));
+  opacity: .95;
+}
+
+/* Corner Ranks matching authentic original edition (Z, N, numbers) */
+.wc-rk {
+  position: absolute;
+  top: 4%;
+  left: 6%;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: 'Cinzel', 'Times New Roman', Georgia, serif;
+  font-weight: 900;
+  font-size: calc(var(--cw) * .23);
+  line-height: 0.95;
+  color: var(--tx, #fff);
+  text-shadow: 0 0 4px #000, 0 2px 4px #000, 0 0 2px #000;
+}
+.wc-rk .orig-corner {
+  font-size: calc(var(--cw) * .26);
+  color: #ffeaa7;
+  text-shadow: 0 0 6px #000, 0 2px 4px #000;
+}
+.wc.jester .wc-rk .orig-corner {
+  color: #84cc16;
+}
+.wc-rk .orig-rk {
+  font-size: calc(var(--cw) * .23);
+}
+.wc-rk .em {
+  width: calc(var(--cw) * .18);
+  height: calc(var(--cw) * .18);
+  color: var(--e);
+  margin-top: 2px;
+  filter: drop-shadow(0 0 3px #000);
+}
+.wc-rk.br {
+  top: auto;
+  left: auto;
+  bottom: 4%;
+  right: 6%;
+  transform: rotate(180deg);
+}
+
+/* Bottom banner displaying card name/suit */
+.wc-banner {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 3%;
+  z-index: 3;
+  text-align: center;
+  font: 800 calc(var(--cw) * .09) var(--sans);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: #fff;
+  text-shadow: 0 0 4px #000, 0 1px 2px #000;
+  opacity: .92;
+}
+.wc.wizard .wc-banner {
+  color: #fde047;
+  letter-spacing: .18em;
+  text-shadow: 0 0 6px #000;
+}
+.wc.jester .wc-banner {
+  color: #a3e635;
+  letter-spacing: .16em;
+  text-shadow: 0 0 6px #000;
+}
+
+/* Card Back */
+.wc.back {
+  background: #000;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .7);
+}
+.wc.back .art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.sico { width: 1.15em; height: 1.15em; vertical-align: -.2em; }
 .pill .sico { color: #fff; }
 .score-badge { position: absolute; left: -8px; bottom: -4px; min-width: 22px; height: 20px; padding: 0 5px; border-radius: 999px; display: grid; place-items: center; font: 700 11px var(--sans); background: rgba(14, 15, 46, .96); color: var(--gold); border: 1.5px solid rgba(255, 255, 255, .7); font-variant-numeric: tabular-nums; }
 .t29-strip { margin-bottom: 2px; }

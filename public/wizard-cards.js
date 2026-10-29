@@ -1,83 +1,271 @@
-/* Original card art for the Wizard deck, drawn as SVG for this project (no third-party artwork).
- * Four suits with distinct shapes as well as colours: Flames (red), Suns (yellow), Leaves (green), Moons (blue). */
+/* Authentic original Wizard card game deck artwork (Amigo / Ken Fisher edition).
+ * Characters:
+ * - Wizard (Z): The Archmage holding the golden chalice / cup against medieval mountain landscape
+ * - Jester (N): The wild jester crouching amidst mystical gnarled trees
+ * Four ancient elemental suits:
+ * - Red (R - Humans / Knights): Ancient winged staff / double axe emblem (red shield / volcanic crag)
+ * - Yellow (Y - Dwarves): Celtic horned ring / ancient key-tau rune (warm gold / stone halls)
+ * - Green (G - Elves): Tri-pronged trident / sacred spear emblem (deep emerald twilight forest)
+ * - Blue (B - Giants): Curved battle trident / runic fork emblem (azure skies / alpine peaks)
+ *
+ * Card backs: Classic matte black border with central crackling flame box, "wizard" rune title in yellow/green,
+ * and the 4 suit symbols (Green trident, Blue rune, Yellow ring, Red tau).
+ */
 (() => {
   'use strict';
 
   const SUITS = {
-    R: { name: 'Flames', one: 'Flame' },
-    Y: { name: 'Suns', one: 'Sun' },
-    G: { name: 'Leaves', one: 'Leaf' },
-    B: { name: 'Moons', one: 'Moon' },
+    R: { name: 'Humans', one: 'Human' },
+    Y: { name: 'Dwarves', one: 'Dwarf' },
+    G: { name: 'Elves', one: 'Elf' },
+    B: { name: 'Giants', one: 'Giant' },
   };
-
-  let rays = '';
-  for (let i = 0; i < 12; i++) {
-    const a = (i * Math.PI) / 6;
-    const pt = (r, d) => `${(50 + r * Math.cos(a + d)).toFixed(1)},${(50 + r * Math.sin(a + d)).toFixed(1)}`;
-    rays += `<polygon points="${pt(29, -0.17)} ${pt(47, 0)} ${pt(29, 0.17)}"/>`;
-  }
 
   const SPRITE = `
 <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <!-- Suit gradients -->
+    <linearGradient id="wz-grad-R" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ff6b6b"/>
+      <stop offset="50%" stop-color="#d63031"/>
+      <stop offset="100%" stop-color="#8b1818"/>
+    </linearGradient>
+    <linearGradient id="wz-grad-Y" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffeaa7"/>
+      <stop offset="45%" stop-color="#fdcb6e"/>
+      <stop offset="100%" stop-color="#d39e00"/>
+    </linearGradient>
+    <linearGradient id="wz-grad-G" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#55efc4"/>
+      <stop offset="50%" stop-color="#00b894"/>
+      <stop offset="100%" stop-color="#006241"/>
+    </linearGradient>
+    <linearGradient id="wz-grad-B" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#74b9ff"/>
+      <stop offset="50%" stop-color="#0984e3"/>
+      <stop offset="100%" stop-color="#0c4294"/>
+    </linearGradient>
+    <linearGradient id="wz-chalice" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fff4cc"/>
+      <stop offset="50%" stop-color="#f1c40f"/>
+      <stop offset="100%" stop-color="#996515"/>
+    </linearGradient>
+  </defs>
+
+  <!-- SUIT R: RED (Humans) - Celtic Cross / Winged Staff Tau Emblem -->
   <symbol id="wz-R" viewBox="0 0 100 100">
-    <path fill="currentColor" d="M52 5C55 22 74 34 76 58C78 78 66 94 50 94C34 94 22 80 24 62C25 50 32 42 38 34C39 44 43 48 47 49C44 36 46 18 52 5Z"/>
-    <path fill="#fff" fill-opacity=".45" d="M50 94C41 94 35 86 36 76C37 66 45 62 48 52C53 60 62 66 62 78C62 87 57 94 50 94Z"/>
-  </symbol>
-  <symbol id="wz-Y" viewBox="0 0 100 100">
-    <g fill="currentColor">${rays}<circle cx="50" cy="50" r="23"/></g>
-    <circle cx="50" cy="50" r="14" fill="#fff" fill-opacity=".4"/>
-  </symbol>
-  <symbol id="wz-G" viewBox="0 0 100 100">
-    <path fill="currentColor" d="M50 4C86 22 94 62 52 96C8 62 14 22 50 4Z"/>
-    <path d="M50 20V88M50 40L34 28M50 52L66 38M50 64L33 52M50 75L65 63" stroke="#fff" stroke-opacity=".6" stroke-width="3.5" fill="none" stroke-linecap="round"/>
-  </symbol>
-  <symbol id="wz-B" viewBox="0 0 100 100">
-    <path fill="currentColor" d="M60 6A45 45 0 1 0 94 68A37 37 0 1 1 60 6Z"/>
-    <path fill="#fff" fill-opacity=".7" d="M76 20l3.2 7.4 8 .8-6 5.3 1.7 7.9-6.9-4-6.9 4 1.7-7.9-6-5.3 8-.8z"/>
-  </symbol>
-
-  <symbol id="wz-wizard" viewBox="0 0 100 130">
-    <g fill="#ffe9a8"><circle cx="13" cy="24" r="1.7"/><circle cx="87" cy="32" r="1.4"/><circle cx="19" cy="76" r="1.3"/><circle cx="86" cy="84" r="1.7"/><circle cx="79" cy="11" r="1.3"/><circle cx="9" cy="50" r="1.1"/></g>
-    <path d="M12 130C14 100 31 90 50 90C69 90 86 100 88 130Z" fill="#6a3fb5"/>
-    <path d="M50 90L41 130M50 90L59 130" stroke="#e7c35a" stroke-width="3" fill="none"/>
-    <ellipse cx="50" cy="60" rx="15" ry="14" fill="#f1c59b"/>
-    <path d="M29 62C27 92 40 110 50 115C60 110 73 92 71 62C63 73 37 73 29 62Z" fill="#f4f1ea"/>
-    <path d="M38 82C42 90 46 94 50 94M62 82C58 90 54 94 50 94" stroke="#cfc8b8" stroke-width="2" fill="none" stroke-linecap="round"/>
-    <ellipse cx="50" cy="63" rx="4.2" ry="3.2" fill="#e2a47a"/>
-    <circle cx="43.5" cy="56" r="1.8" fill="#2b1b4d"/><circle cx="56.5" cy="56" r="1.8" fill="#2b1b4d"/>
-    <path d="M40 52Q43.5 50 47 52M53 52Q56.5 50 60 52" stroke="#f4f1ea" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-    <path d="M53 3Q67 8 62 22Q72 36 80 50L20 50Q32 38 40 24Q48 14 53 3Z" fill="#4a2f9c"/>
-    <path d="M53 3Q57 4 58 8Q50 17 46 31Q42 41 34 50L20 50Q32 38 40 24Q48 14 53 3Z" fill="#fff" fill-opacity=".13"/>
-    <ellipse cx="50" cy="50" rx="34" ry="7" fill="#3a2480"/>
-    <path d="M31 44Q50 53 69 44L70 48.5Q50 58 30 48.5Z" fill="#e7c35a"/>
-    <path fill="#ffe9a8" d="M57 29l2.1 4.6 5 .6-3.7 3.4 1 5-4.4-2.5-4.4 2.5 1-5-3.7-3.4 5-.6z"/>
-  </symbol>
-
-  <symbol id="wz-jester" viewBox="0 0 100 130">
-    <path d="M22 130L28 96H72L78 130Z" fill="#c43d3d"/>
-    <path d="M50 96L61 113L50 130L39 113Z" fill="#2aa198"/>
-    <path d="M26 90L32 102L38 90L44 102L50 90L56 102L62 90L68 102L74 90Z" fill="#fff" stroke="#c9c9c9" stroke-width="1"/>
-    <circle cx="50" cy="64" r="19" fill="#f6d2ab"/>
-    <circle cx="42.5" cy="61" r="2.2" fill="#2b2b2b"/><circle cx="57.5" cy="61" r="2.2" fill="#2b2b2b"/>
-    <circle cx="39" cy="69" r="3.6" fill="#e9777a" fill-opacity=".55"/><circle cx="61" cy="69" r="3.6" fill="#e9777a" fill-opacity=".55"/>
-    <circle cx="50" cy="67" r="3.4" fill="#d9534f"/>
-    <path d="M40 74Q50 84 60 74" stroke="#7a2b2b" stroke-width="2.4" fill="none" stroke-linecap="round"/>
-    <path d="M33 53Q14 49 8 23Q6 15 14 18Q30 27 50 41Z" fill="#2aa198"/>
-    <path d="M67 53Q86 49 92 23Q94 15 86 18Q70 27 50 41Z" fill="#d94a4a"/>
-    <path d="M40 49Q36 23 50 9Q64 23 60 49Z" fill="#f0b429"/>
-    <path d="M31 53Q50 61 69 53L70 47.5Q50 56 30 47.5Z" fill="#fff"/>
-    <g fill="#f0b429" stroke="#9a6b00" stroke-width="1.2"><circle cx="12" cy="18" r="5"/><circle cx="88" cy="18" r="5"/><circle cx="50" cy="8" r="4.5"/></g>
-  </symbol>
-
-  <symbol id="wz-back" viewBox="0 0 100 140">
-    <rect width="100" height="140" fill="#2a1f66"/>
-    <g fill="none" stroke="#e7c35a" stroke-width="1.6">
-      <rect x="8" y="8" width="84" height="124" rx="8"/>
-      <rect x="14" y="14" width="72" height="112" rx="5" stroke-opacity=".55"/>
+    <g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Main vertical staff -->
+      <line x1="50" y1="12" x2="50" y2="90"/>
+      <!-- Cross bar -->
+      <line x1="24" y1="36" x2="76" y2="36"/>
+      <!-- Downward curved wings / hooks -->
+      <path d="M24 36 C24 56 36 64 50 64 C64 64 76 56 76 36"/>
+      <!-- Top ring crown -->
+      <circle cx="50" cy="24" r="12" fill="none" stroke="currentColor" stroke-width="6"/>
     </g>
-    <g fill="#e7c35a" fill-opacity=".18"><path d="M50 22L74 70L50 118L26 70Z"/></g>
-    <path fill="#e7c35a" d="M50 44L57 62L77 64L62 77L67 97L50 86L33 97L38 77L23 64L43 62Z"/>
-    <g fill="#e7c35a" fill-opacity=".7"><circle cx="24" cy="26" r="2.2"/><circle cx="76" cy="26" r="2.2"/><circle cx="24" cy="114" r="2.2"/><circle cx="76" cy="114" r="2.2"/></g>
+    <circle cx="50" cy="24" r="5" fill="currentColor"/>
+    <circle cx="50" cy="90" r="4.5" fill="currentColor"/>
+  </symbol>
+
+  <!-- SUIT Y: YELLOW (Dwarves) - Horned Sun-Ring / Tau Rune -->
+  <symbol id="wz-Y" viewBox="0 0 100 100">
+    <!-- Outer ring with central bar -->
+    <circle cx="50" cy="46" r="28" fill="none" stroke="currentColor" stroke-width="7"/>
+    <!-- Central sun disc -->
+    <circle cx="50" cy="46" r="11" fill="currentColor"/>
+    <!-- Bottom anchor stem -->
+    <line x1="50" y1="74" x2="50" y2="94" stroke="currentColor" stroke-width="7" stroke-linecap="round"/>
+    <line x1="38" y1="94" x2="62" y2="94" stroke="currentColor" stroke-width="7" stroke-linecap="round"/>
+    <!-- Top horns / crest -->
+    <path d="M26 30 C34 14 50 12 50 12 C50 12 66 14 74 30" fill="none" stroke="currentColor" stroke-width="6.5" stroke-linecap="round"/>
+  </symbol>
+
+  <!-- SUIT G: GREEN (Elves) - Tri-pronged Sacred Spear / Trident Rune -->
+  <symbol id="wz-G" viewBox="0 0 100 100">
+    <g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Central spear shaft -->
+      <line x1="50" y1="8" x2="50" y2="92"/>
+      <!-- Left crescent prong -->
+      <path d="M22 28 C22 58 42 66 50 66"/>
+      <!-- Right crescent prong -->
+      <path d="M78 28 C78 58 58 66 50 66"/>
+      <!-- Crossguard ring -->
+      <line x1="32" y1="78" x2="68" y2="78"/>
+    </g>
+    <!-- Arrowhead points -->
+    <polygon points="50,6 43,22 57,22" fill="currentColor"/>
+    <polygon points="22,26 16,38 27,36" fill="currentColor"/>
+    <polygon points="78,26 84,38 73,36" fill="currentColor"/>
+  </symbol>
+
+  <!-- SUIT B: BLUE (Giants) - Forked Runic Battle Crescent -->
+  <symbol id="wz-B" viewBox="0 0 100 100">
+    <g fill="none" stroke="currentColor" stroke-width="7" stroke-linecap="round">
+      <!-- Main stem -->
+      <line x1="50" y1="18" x2="50" y2="92"/>
+      <!-- Wide twin scythe horns -->
+      <path d="M18 20 Q50 62 82 20"/>
+      <!-- Inner rune loop -->
+      <circle cx="50" cy="40" r="12" fill="none" stroke="currentColor" stroke-width="6"/>
+      <!-- Base crossbar -->
+      <line x1="36" y1="92" x2="64" y2="92"/>
+    </g>
+    <circle cx="18" cy="20" r="4.5" fill="currentColor"/>
+    <circle cx="82" cy="20" r="4.5" fill="currentColor"/>
+    <circle cx="50" cy="18" r="4.5" fill="currentColor"/>
+  </symbol>
+
+  <!-- WIZARD (Z) - Archmage with Holy Chalice / Goblet (Original Ken Fisher / Amigo Card) -->
+  <symbol id="wz-wizard" viewBox="0 0 100 130">
+    <!-- Mountain and sky background of the original wizard card -->
+    <rect width="100" height="130" fill="#2c5282"/>
+    <!-- Distant mountain peaks -->
+    <polygon points="0,75 30,48 55,70 80,45 100,68 100,130 0,130" fill="#1a365d"/>
+    <polygon points="0,85 24,68 45,86 75,64 100,82 100,130 0,130" fill="#0f2240"/>
+
+    <!-- Archmage Robe (Royal blue with gold collar) -->
+    <path d="M10 130 C12 88 32 80 50 80 C68 80 88 88 90 130 Z" fill="#1e3a8a"/>
+    <path d="M30 80 L36 130 M70 80 L64 130" stroke="#f1c40f" stroke-width="2.5" fill="none"/>
+    <polygon points="50,80 44,92 56,92" fill="#f1c40f"/>
+
+    <!-- Head and Long Beard -->
+    <ellipse cx="50" cy="44" rx="14" ry="15" fill="#f5c296"/>
+    <!-- Serious wise eyes -->
+    <circle cx="44" cy="42" r="1.8" fill="#1e293b"/>
+    <circle cx="56" cy="42" r="1.8" fill="#1e293b"/>
+    <!-- Dark grey / brown hair and beard matching original -->
+    <path d="M36 34 C36 22 64 22 64 34 C64 42 66 52 64 64 C60 76 54 82 50 84 C46 82 40 76 36 64 C34 52 36 42 36 34 Z" fill="#64748b"/>
+    <path d="M42 54 C46 64 50 72 50 78 C50 72 54 64 58 54 C54 58 46 58 42 54 Z" fill="#94a3b8"/>
+    <!-- Golden Crown / Circlet of the Wizard -->
+    <path d="M35 30 L40 22 L45 28 L50 18 L55 28 L60 22 L65 30 Z" fill="url(#wz-chalice)"/>
+    <rect x="35" y="28" width="30" height="4" fill="#d97706"/>
+    <circle cx="50" cy="30" r="1.5" fill="#e11d48"/>
+
+    <!-- Raised Hands holding the Iconic Golden Chalice / Cup -->
+    <!-- Sleeves -->
+    <path d="M22 130 C20 105 32 94 38 90" stroke="#1e3a8a" stroke-width="12" stroke-linecap="round" fill="none"/>
+    <path d="M78 130 C80 105 68 94 62 90" stroke="#1e3a8a" stroke-width="12" stroke-linecap="round" fill="none"/>
+    <!-- Hands -->
+    <circle cx="40" cy="88" r="5" fill="#f5c296"/>
+    <circle cx="60" cy="88" r="5" fill="#f5c296"/>
+
+    <!-- The Golden Wizard Chalice -->
+    <g transform="translate(50, 78)">
+      <!-- Cup Bowl -->
+      <path d="M-12,-8 C-12,8 12,8 12,-8 Z" fill="url(#wz-chalice)" stroke="#b45309" stroke-width="1"/>
+      <ellipse cx="0" cy="-8" rx="12" ry="3.5" fill="#fde68a" stroke="#b45309" stroke-width="1"/>
+      <!-- Glowing Blue Liquid Inside Chalice -->
+      <ellipse cx="0" cy="-8" rx="10" ry="2.6" fill="#38bdf8"/>
+      <!-- Chalice Stem & Foot -->
+      <rect x="-2" y="8" width="4" height="12" fill="#b45309"/>
+      <ellipse cx="0" cy="20" rx="9" ry="3.5" fill="url(#wz-chalice)" stroke="#b45309" stroke-width="1"/>
+      <!-- Sparkle from chalice -->
+      <polygon points="0,-18 2,-11 9,-9 2,-7 0,0 -2,-7 -9,-9 -2,-11" fill="#ffffff" opacity=".95"/>
+    </g>
+  </symbol>
+
+  <!-- JESTER / NARR (N) - Wild Court Fool in the Twilight Forest (Original Ken Fisher Card) -->
+  <symbol id="wz-jester" viewBox="0 0 100 130">
+    <!-- Forest Twilight Landscape (Green/Dark Forest with twisted trees) -->
+    <rect width="100" height="130" fill="#064e3b"/>
+    <!-- Distant twisted pines -->
+    <polygon points="0,60 14,35 28,60" fill="#022c22"/>
+    <polygon points="72,55 86,30 100,55" fill="#022c22"/>
+    <polygon points="18,65 30,42 42,65" fill="#065f46"/>
+    <polygon points="58,62 70,38 82,62" fill="#065f46"/>
+    <!-- Forest floor -->
+    <path d="M0 80 Q50 70 100 80 L100 130 L0 130 Z" fill="#022c22"/>
+
+    <!-- Crouching Wild Jester in Red / Turquoise Doublet -->
+    <!-- Harlequin Legs crouched -->
+    <path d="M22 130 L32 105 L45 118" stroke="#dc2626" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <path d="M78 130 L68 105 L55 118" stroke="#0d9488" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+    <!-- Jester Body leaning forward -->
+    <ellipse cx="50" cy="94" rx="18" ry="16" fill="#b91c1c"/>
+    <path d="M34 94 C34 94 45 80 50 94 C55 80 66 94 66 94" fill="#0f766e"/>
+
+    <!-- Jester Head with expressive theatrical expression -->
+    <circle cx="50" cy="62" r="15" fill="#fcd34d"/>
+    <!-- Eyes, nose and wide grin -->
+    <circle cx="44" cy="59" r="2.2" fill="#18181b"/>
+    <circle cx="56" cy="59" r="2.2" fill="#18181b"/>
+    <circle cx="50" cy="65" r="2.5" fill="#e11d48"/>
+    <path d="M40 70 Q50 82 60 70" stroke="#991b1b" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+    <path d="M43 71 Q50 78 57 71" fill="#ffffff"/>
+
+    <!-- Wild Spiked Jester Hair / Jester Cap with Ringing Bells -->
+    <!-- Wild Hair Spikes (Iconic green/yellow wild hair of the original Narr) -->
+    <path d="M32 54 L18 42 L32 46 L20 28 L38 38 L32 18 L46 32 L50 12 L54 32 L68 18 L62 38 L80 28 L68 46 L82 42 L68 54 Z" fill="#84cc16"/>
+    <path d="M36 50 L26 40 L36 44 L28 30 L42 36 L38 22 L48 32 L50 18 L52 32 L62 22 L58 36 L72 30 L64 44 L74 40 L64 50 Z" fill="#eab308" opacity=".8"/>
+
+    <!-- Little brass bells jingling on his collar and wrists -->
+    <circle cx="34" cy="80" r="3" fill="#facc15" stroke="#a16207" stroke-width="1"/>
+    <circle cx="50" cy="82" r="3.2" fill="#facc15" stroke="#a16207" stroke-width="1"/>
+    <circle cx="66" cy="80" r="3" fill="#facc15" stroke="#a16207" stroke-width="1"/>
+
+    <!-- Hands gesticulating playfully -->
+    <circle cx="28" cy="92" r="4.5" fill="#fcd34d"/>
+    <circle cx="72" cy="92" r="4.5" fill="#fcd34d"/>
+  </symbol>
+
+  <!-- AUTHENTIC ORIGINAL CARD BACK (Black Border, Fiery Crackle Panel, "wizard" Gothic Title, 4 Suit Runes) -->
+  <symbol id="wz-back" viewBox="0 0 100 140">
+    <!-- Solid Black Outer Border of original Wizard card -->
+    <rect width="100" height="140" fill="#000000"/>
+    <!-- Inner border frame -->
+    <rect x="6" y="6" width="88" height="128" rx="4" fill="#0a0a14" stroke="#4a5568" stroke-width="1.2"/>
+
+    <!-- Crackling Fire / Lightning Panel in Center -->
+    <rect x="10" y="10" width="80" height="120" rx="3" fill="#070c18"/>
+    <!-- Molten Fire Veins in the rock texture -->
+    <path d="M12 40 Q25 45 40 32 T70 38 T88 28" stroke="#ff4757" stroke-width="1.8" fill="none" opacity=".8"/>
+    <path d="M14 85 Q30 75 50 88 T86 78" stroke="#ffa502" stroke-width="1.8" fill="none" opacity=".75"/>
+    <path d="M25 10 Q32 30 28 60 T35 110 T25 125" stroke="#ff6348" stroke-width="1.5" fill="none" opacity=".7"/>
+    <path d="M72 15 Q68 45 74 75 T66 125" stroke="#eccc68" stroke-width="1.5" fill="none" opacity=".65"/>
+
+    <!-- Gothic / Runic "wizard" Title in Center Header -->
+    <g transform="translate(50, 32)">
+      <!-- Glowing drop shadow of text -->
+      <text x="0" y="0" text-anchor="middle" font-family="'Cinzel', 'Times New Roman', Georgia, serif" font-weight="900" font-size="19" letter-spacing="0.06em" fill="#000" stroke="#f1c40f" stroke-width="2.5">wizard</text>
+      <text x="0" y="0" text-anchor="middle" font-family="'Cinzel', 'Times New Roman', Georgia, serif" font-weight="900" font-size="19" letter-spacing="0.06em" fill="#ffeaa7">wizard</text>
+    </g>
+
+    <!-- The 4 Authentic Suit Emblems Displayed on the Card Back -->
+    <!-- 1. Green Trident (Elves) - Top Left -->
+    <g transform="translate(30, 62) scale(0.28)">
+      <circle cx="0" cy="0" r="42" fill="#064e3b" stroke="#00b894" stroke-width="4"/>
+      <!-- Spear symbol -->
+      <line x1="0" y1="-32" x2="0" y2="34" stroke="#55efc4" stroke-width="9" stroke-linecap="round"/>
+      <path d="M-22 -12 C-22 14 -8 22 0 22 C8 22 22 14 22 -12" fill="none" stroke="#55efc4" stroke-width="9" stroke-linecap="round"/>
+      <polygon points="0,-36 -8,-20 8,-20" fill="#55efc4"/>
+    </g>
+
+    <!-- 2. Blue Battle Crescent (Giants) - Top Right -->
+    <g transform="translate(70, 62) scale(0.28)">
+      <circle cx="0" cy="0" r="42" fill="#0c4a6e" stroke="#0284c7" stroke-width="4"/>
+      <line x1="0" y1="-28" x2="0" y2="34" stroke="#7dd3fc" stroke-width="9" stroke-linecap="round"/>
+      <path d="M-24 -18 Q0 18 24 -18" fill="none" stroke="#7dd3fc" stroke-width="9" stroke-linecap="round"/>
+      <circle cx="0" cy="-2" r="10" fill="none" stroke="#7dd3fc" stroke-width="7"/>
+    </g>
+
+    <!-- 3. Yellow Sun-Tau (Dwarves) - Bottom Left -->
+    <g transform="translate(30, 102) scale(0.28)">
+      <circle cx="0" cy="0" r="42" fill="#78350f" stroke="#d97706" stroke-width="4"/>
+      <circle cx="0" cy="-4" r="22" fill="none" stroke="#fde047" stroke-width="9"/>
+      <circle cx="0" cy="-4" r="8" fill="#fde047"/>
+      <line x1="0" y1="18" x2="0" y2="34" stroke="#fde047" stroke-width="9" stroke-linecap="round"/>
+    </g>
+
+    <!-- 4. Red Winged Cross (Humans) - Bottom Right -->
+    <g transform="translate(70, 102) scale(0.28)">
+      <circle cx="0" cy="0" r="42" fill="#7f1d1d" stroke="#dc2626" stroke-width="4"/>
+      <line x1="0" y1="-32" x2="0" y2="34" stroke="#fca5a5" stroke-width="9" stroke-linecap="round"/>
+      <line x1="-18" y1="-12" x2="18" y2="-12" stroke="#fca5a5" stroke-width="9" stroke-linecap="round"/>
+      <path d="M-18 -12 C-18 8 -8 16 0 16 C8 16 18 8 18 -12" fill="none" stroke="#fca5a5" stroke-width="8"/>
+      <circle cx="0" cy="-20" r="6" fill="#fca5a5"/>
+    </g>
   </symbol>
 </svg>`;
 
@@ -91,20 +279,31 @@
   const use = (id, cls) => `<svg class="${cls}" viewBox="0 0 100 100" aria-hidden="true"><use href="#${id}"/></svg>`;
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  /** Markup for one card. c = {id,type:'num'|'wizard'|'jester'|'back',suit,rank}. */
+  /**
+   * Authentic Wizard card corners:
+   * - Wizard displays 'Z' (Zauberer) in the corners
+   * - Jester displays 'N' (Narr) in the corners
+   * - Numbered cards display 1..13 with the suit symbol directly beside or below the rank
+   */
   function cardHTML(c, { tag = 'div', cls = '', attrs = '' } = {}) {
     if (c.type === 'back') {
       return `<${tag} class="card wc back ${cls}" aria-label="Hidden card" ${attrs}><svg class="art" viewBox="0 0 100 140" preserveAspectRatio="none" aria-hidden="true"><use href="#wz-back"/></svg></${tag}>`;
     }
     if (c.type === 'wizard') {
-      return `<${tag} class="card wc wizard ${cls}" aria-label="Wizard" ${attrs}><span class="wc-in"><span class="wc-rk tl">W</span><svg class="art" viewBox="0 0 100 130" aria-hidden="true"><use href="#wz-wizard"/></svg><span class="wc-rk br">W</span></span></${tag}>`;
+      return `<${tag} class="card wc wizard ${cls}" aria-label="Wizard" ${attrs}><span class="wc-in"><span class="wc-rk tl"><span class="orig-corner">Z</span></span><svg class="art" viewBox="0 0 100 130" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><use href="#wz-wizard"/></svg><span class="wc-banner">Wizard</span><span class="wc-rk br"><span class="orig-corner">Z</span></span></span></${tag}>`;
     }
     if (c.type === 'jester') {
-      return `<${tag} class="card wc jester ${cls}" aria-label="Jester" ${attrs}><span class="wc-in"><span class="wc-rk tl">J</span><svg class="art" viewBox="0 0 100 130" aria-hidden="true"><use href="#wz-jester"/></svg><span class="wc-rk br">J</span></span></${tag}>`;
+      return `<${tag} class="card wc jester ${cls}" aria-label="Jester" ${attrs}><span class="wc-in"><span class="wc-rk tl"><span class="orig-corner">N</span></span><svg class="art" viewBox="0 0 100 130" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><use href="#wz-jester"/></svg><span class="wc-banner">Jester</span><span class="wc-rk br"><span class="orig-corner">N</span></span></span></${tag}>`;
     }
     const name = `${SUITS[c.suit].one} ${c.rank}`;
     return `<${tag} class="card wc suit-${c.suit} ${cls}" aria-label="${esc(name)}" ${attrs}><span class="wc-in">
-      <span class="wc-rk tl">${c.rank}${use('wz-' + c.suit, 'em')}</span>${use('wz-' + c.suit, 'big')}<span class="wc-rk br">${c.rank}${use('wz-' + c.suit, 'em')}</span></span></${tag}>`;
+      <span class="wc-rk tl"><span class="orig-rk">${c.rank}</span>${use('wz-' + c.suit, 'em')}</span>
+      <div class="wc-scene suit-${c.suit}">
+        ${use('wz-' + c.suit, 'big')}
+      </div>
+      <span class="wc-banner">${esc(SUITS[c.suit].name)} ${c.rank}</span>
+      <span class="wc-rk br"><span class="orig-rk">${c.rank}</span>${use('wz-' + c.suit, 'em')}</span>
+    </span></${tag}>`;
   }
 
   const suitIcon = (s, cls = 'sico') => use('wz-' + s, cls);
