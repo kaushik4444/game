@@ -26,12 +26,15 @@ const SECURITY_HEADERS = {
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I / O
 const BOT_NAMES = ['Merlin', 'Morgana', 'Gandalf', 'Circe', 'Rincewind', 'Radagast', 'Elminster', 'Oz'];
 const MAX_ROOMS = 500;
+const MAX_SPECTATORS = 20;
+const CHAT_KEEP = 60; // messages remembered per table
 const AVATARS = ['🧙', '🧝', '🧛', '🧞', '🦊', '🐺', '🦉', '🐉', '🦄', '🐙', '🐸', '🦁', '🐼', '🐯', '🦅', '🐲'];
 const EMOTES = ['👍', '👏', '😂', '😮', '😡', '🤔', '🔥', '😎'];
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
 const rand = (a, b) => a + Math.random() * (b - a);
 const cleanName = (s) => (typeof s === 'string' ? s.replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 20) : '');
+const cleanText = (s) => (typeof s === 'string' ? s.replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200) : '');
 
 function start(opts = {}) {
   const port = opts.port ?? Number(process.env.PORT || 3000);
@@ -39,6 +42,9 @@ function start(opts = {}) {
   const autoAdvanceMs = opts.autoAdvanceMs ?? 8000; // pause between rounds
   const absentMs = opts.absentMs ?? 15000; // a disconnected human's turn is played by a bot after this
   const maxMsgsPerSec = opts.maxMsgsPerSec ?? 30; // per socket; humans send a handful of messages per minute
+  const trickPauseMs = opts.trickPauseMs ?? 1700; // time everybody gets to see a finished trick being collected
+  const timeScale = opts.timeScale ?? 1; // tests shrink the turn time limit with this
+  const forcedMs = opts.forcedMs ?? 700; // delay between automatic plays in the last trick of a round
 
   const players = new Map(); // id -> player
   const tokens = new Map(); // secret token -> player
@@ -92,6 +98,10 @@ function start(opts = {}) {
   const sendError = (p, message) => send(p.ws, { t: 'error', message });
   const isConnected = (m) => m.bot || !!players.get(m.id)?.connected;
   const humans = (room) => room.members.filter((m) => !m.bot);
+  const isSpec = (room, id) => room.spectators.some((s) => s.id === id);
+  /** Everybody who should receive table updates: seated humans and spectators. */
+  const viewers = (room) => humans(room).concat(room.spectators);
+  const awaitingOf = (g) => [].concat(g.awaiting() ?? []);
 
   function roomInfo(room) {
     const def = games.get(room.gameId);
@@ -106,24 +116,77 @@ function start(opts = {}) {
       max: def.seats.max,
       seatLabels: def.seatLabel ? Array.from({ length: room.seats }, (_, i) => def.seatLabel(i, room.seats)) : null,
       members: room.members.map((m) => ({ id: m.id, name: m.name, bot: m.bot, avatar: m.avatar, connected: isConnected(m) })),
+      spectators: room.spectators.map((s) => ({ id: s.id, name: s.name, avatar: s.avatar, connected: isConnected(s) })),
+      deadline: room.status === 'playing' ? room.deadline : null, // epoch ms when the awaited human(s) get auto-played
+      now: Date.now(), // lets clients correct for clock differences
     };
   }
 
   function broadcast(room) {
     const info = roomInfo(room);
-    for (const m of humans(room)) {
+    for (const m of viewers(room)) {
       const p = players.get(m.id);
       if (p && p.connected) send(p.ws, { t: 'state', room: info, view: room.game ? room.game.view(m.id) : null });
     }
   }
 
+  // ------------------------------------------------------------ chat
+  function pushChat(room, m) {
+    m.ts = Date.now();
+    room.chat.push(m);
+    if (room.chat.length > CHAT_KEEP) room.chat.shift();
+    for (const v of viewers(room)) {
+      const p = players.get(v.id);
+      if (p && p.connected) send(p.ws, { t: 'chat', m });
+    }
+  }
+  const sys = (room, text) => pushChat(room, { sys: true, text });
+  const sendChatLog = (p, room) => send(p.ws, { t: 'chatlog', messages: room.chat });
+  function notifyOthers(room, exceptId, text) {
+    for (const v of viewers(room)) {
+      if (v.id === exceptId) continue;
+      const q = players.get(v.id);
+      if (q && q.connected) send(q.ws, { t: 'notice', text });
+    }
+  }
+
+  // ------------------------------------------------------------ turn timer
+  const limitMs = (room) => {
+    const s = Number(room.options && room.options.timeLimit);
+    return Number.isFinite(s) && s > 0 ? s * 1000 * timeScale : 0;
+  };
+
+  /**
+   * Called after every game action: starts a fresh deadline for whoever the game now waits for.
+   * During simultaneous moves (everybody bids at once) the deadline is shared and not restarted by each bid.
+   */
+  function touchTimer(room) {
+    const g = room.game;
+    const limit = limitMs(room);
+    const now = awaitingOf(g);
+    const prev = room.waiting || [];
+    const sameBatch = prev.length > 1 && now.length > 0 && now.every((id) => prev.includes(id));
+    const humanWaiting = now.some((id) => room.members.some((m) => m.id === id && !m.bot));
+    if (!limit || !humanWaiting) room.deadline = null;
+    else if (!sameBatch || !room.deadline) room.deadline = Date.now() + Math.max(0, (room.pauseUntil || 0) - Date.now()) + limit;
+    room.waiting = now;
+  }
+
   function afterChange(room) {
-    if (room.game && room.game.isOver()) room.status = 'finished';
+    const g = room.game;
+    if (g) {
+      if (g.isOver()) room.status = 'finished';
+      // a trick just finished: give everyone a moment to see it being collected before the next card
+      const lt = g.stamp ? g.stamp() : null;
+      if (lt && lt !== room.lastStamp && trickPauseMs > 0) room.pauseUntil = Date.now() + trickPauseMs;
+      room.lastStamp = lt;
+      touchTimer(room);
+    }
     broadcast(room);
     schedule(room);
   }
 
-  /** Decide whether the server must act soon (bot turn, absent human, between rounds) and set one timer for it. */
+  /** Decide whether the server must act soon (bot turn, absent human, forced play, timeout, between rounds) and set one timer for it. */
   function schedule(room) {
     clearTimeout(room.timer);
     room.timer = null;
@@ -131,35 +194,58 @@ function start(opts = {}) {
     if (!g || room.status !== 'playing' || g.isOver()) return;
     if (!humans(room).some(isConnected)) return; // nobody watching: pause
 
-    const waiting = [].concat(g.awaiting() ?? []);
-    let who = null;
+    const waiting = awaitingOf(g);
+    const pause = Math.max(0, (room.pauseUntil || 0) - Date.now());
     let delay;
     let run;
+    let valid;
+    const forced = waiting.length && g.forcedPlay ? g.forcedPlay() : null;
     if (!waiting.length) {
       const auto = g.autoAction();
       if (!auto) return;
       delay = autoAdvanceMs;
       run = () => g.act(null, auto);
+      valid = () => awaitingOf(g).length === 0;
+    } else if (forced) {
+      // last trick of the round: after the first card the rest is automatic
+      delay = Math.max(forcedMs, pause);
+      run = () => g.act(forced.playerId, forced.action);
+      valid = () => {
+        const f = g.forcedPlay && g.forcedPlay();
+        return !!f && f.playerId === forced.playerId;
+      };
     } else {
       const ms = waiting.map((id) => room.members.find((x) => x.id === id)).filter(Boolean);
-      const bot = ms.find((m) => m.bot);
-      const absent = ms.find((m) => !m.bot && !isConnected(m));
-      if (bot) {
-        who = bot.id;
-        delay = rand(botDelay[0], botDelay[1]);
-      } else if (absent) {
-        who = absent.id;
-        delay = absentMs;
-      } else return; // connected humans are thinking
-      run = () => g.act(who, g.botAction(who));
+      const who = ms.find((m) => m.bot) || ms.find((m) => !m.bot && !isConnected(m));
+      if (who) {
+        delay = Math.max(who.bot ? rand(botDelay[0], botDelay[1]) : absentMs, pause);
+        run = () => g.act(who.id, g.botAction(who.id));
+        valid = () => awaitingOf(g).includes(who.id) && (who.bot || !isConnected(who));
+      } else if (room.deadline) {
+        // connected humans are thinking, but the table has a time limit
+        const dl = room.deadline;
+        delay = Math.max(0, dl - Date.now());
+        run = () => {
+          let res = { ok: true };
+          for (const id of awaitingOf(g)) {
+            const m = room.members.find((x) => x.id === id);
+            const r = g.act(id, g.botAction(id));
+            if (!r.ok) res = r;
+            else if (m && !m.bot) {
+              sys(room, `⏱ ${m.name} ran out of time. A bot played for them.`);
+              const q = players.get(id);
+              if (q && q.connected) send(q.ws, { t: 'notice', text: 'Time is up! A bot played for you.' });
+            }
+          }
+          return res;
+        };
+        valid = () => room.deadline === dl && awaitingOf(g).length > 0;
+      } else return; // connected humans are thinking, no limit
     }
     room.timer = setTimeout(() => {
       room.timer = null;
       if (room.game !== g || g.isOver()) return;
-      const now = [].concat(g.awaiting() ?? []);
-      if (who === null ? now.length > 0 : !now.includes(who)) return schedule(room);
-      const m = room.members.find((x) => x.id === who);
-      if (who !== null && m && !m.bot && isConnected(m)) return; // they came back
+      if (!valid()) return schedule(room);
       const res = run();
       if (!res.ok) console.error('auto action failed:', res.error);
       afterChange(room);
@@ -178,9 +264,12 @@ function start(opts = {}) {
   function destroyRoom(room) {
     clearTimeout(room.timer);
     rooms.delete(room.code);
-    for (const m of humans(room)) {
+    for (const m of viewers(room)) {
       const p = players.get(m.id);
-      if (p && p.room === room.code) p.room = null;
+      if (p && p.room === room.code) {
+        p.room = null;
+        if (isSpec(room, m.id)) send(p.ws, { t: 'left' });
+      }
     }
   }
 
@@ -188,10 +277,18 @@ function start(opts = {}) {
     const room = rooms.get(p.room);
     p.room = null;
     if (!room) return;
+    const si = room.spectators.findIndex((s) => s.id === p.id);
+    if (si >= 0) {
+      room.spectators.splice(si, 1);
+      sys(room, `👁 ${p.name} stopped watching`);
+      return broadcast(room);
+    }
     const i = room.members.findIndex((m) => m.id === p.id);
     if (i < 0) return;
-    if (room.status === 'playing') room.members[i].bot = true; // a bot takes over the seat
-    else room.members.splice(i, 1);
+    if (room.status === 'playing') {
+      room.members[i].bot = true; // a bot takes over the seat
+      sys(room, `${p.name} left. A bot took over the seat.`);
+    } else room.members.splice(i, 1);
     if (!humans(room).length) return destroyRoom(room);
     if (room.hostId === p.id) room.hostId = humans(room)[0].id;
     broadcast(room);
@@ -200,6 +297,11 @@ function start(opts = {}) {
 
   function addMember(room, p) {
     room.members.push({ id: p.id, name: p.name, avatar: p.avatar, bot: false });
+    p.room = room.code;
+  }
+
+  function addSpectator(room, p) {
+    room.spectators.push({ id: p.id, name: p.name, avatar: p.avatar });
     p.room = room.code;
   }
 
@@ -214,19 +316,35 @@ function start(opts = {}) {
         m.avatar = p.avatar;
         if (room.status !== 'playing') m.name = p.name;
       }
+      const s = room.spectators.find((x) => x.id === p.id);
+      if (s) {
+        s.avatar = p.avatar;
+        s.name = p.name;
+      }
       broadcast(room);
     },
 
     emote(p, msg) {
       const room = rooms.get(p.room);
-      if (!room || room.status === 'lobby' || !EMOTES.includes(msg.e)) return;
+      if (!room || room.status === 'lobby' || isSpec(room, p.id) || !EMOTES.includes(msg.e)) return;
       const now = Date.now();
       if (now - (p.lastEmote || 0) < 700) return;
       p.lastEmote = now;
-      for (const m of humans(room)) {
+      for (const m of viewers(room)) {
         const q = players.get(m.id);
         if (q && q.connected) send(q.ws, { t: 'emote', id: p.id, e: msg.e });
       }
+    },
+
+    chat(p, msg) {
+      const room = rooms.get(p.room);
+      if (!room) return;
+      const text = cleanText(msg.text);
+      if (!text) return;
+      const now = Date.now();
+      if (now - (p.lastChat || 0) < 500) return sendError(p, 'Slow down a little');
+      p.lastChat = now;
+      pushChat(room, { id: p.id, name: p.name, avatar: p.avatar, text, spec: isSpec(room, p.id) });
     },
 
     create(p, msg) {
@@ -235,10 +353,27 @@ function start(opts = {}) {
       if (rooms.size >= MAX_ROOMS) return sendError(p, 'Server is full, try again later');
       applyProfile(p, msg);
       if (p.room) leaveRoom(p);
-      const room = { code: newCode(), gameId: def.id, hostId: p.id, status: 'lobby', seats: def.seats.default, options: sanitizeOptions(def, {}), members: [], game: null, timer: null };
+      const room = {
+        code: newCode(),
+        gameId: def.id,
+        hostId: p.id,
+        status: 'lobby',
+        seats: def.seats.default,
+        options: sanitizeOptions(def, {}),
+        members: [],
+        spectators: [],
+        chat: [],
+        game: null,
+        timer: null,
+        deadline: null,
+        waiting: [],
+        pauseUntil: 0,
+        lastStamp: null,
+      };
       rooms.set(room.code, room);
       addMember(room, p);
       broadcast(room);
+      sendChatLog(p, room);
     },
 
     join(p, msg) {
@@ -246,10 +381,30 @@ function start(opts = {}) {
       const room = rooms.get(code);
       applyProfile(p, msg);
       if (!room) return sendError(p, `No table with code ${code || '?'}`);
-      if (p.room === code && room.members.some((m) => m.id === p.id)) return broadcast(room);
-      if (room.status !== 'lobby') return sendError(p, 'That game has already started');
+      if (p.room === code && (room.members.some((m) => m.id === p.id) || isSpec(room, p.id))) return broadcast(room);
+      if (room.status !== 'lobby') {
+        // the game is already running: the newcomer watches
+        if (room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
+        if (p.room) leaveRoom(p);
+        addSpectator(room, p);
+        sys(room, `👁 ${p.name} is watching`);
+        notifyOthers(room, p.id, `👁 ${p.name} is watching the game`);
+        broadcast(room);
+        sendChatLog(p, room);
+        return;
+      }
       if (room.members.length >= room.seats) return sendError(p, 'That table is full');
       if (p.room) leaveRoom(p);
+      addMember(room, p);
+      broadcast(room);
+      sendChatLog(p, room);
+    },
+
+    sit(p) {
+      const room = rooms.get(p.room);
+      if (!room || room.status !== 'lobby' || !isSpec(room, p.id)) return sendError(p, 'Not possible right now');
+      if (room.members.length >= room.seats) return sendError(p, 'There is no open seat');
+      room.spectators.splice(room.spectators.findIndex((s) => s.id === p.id), 1);
       addMember(room, p);
       broadcast(room);
     },
@@ -308,12 +463,17 @@ function start(opts = {}) {
         Math.random
       );
       room.status = 'playing';
+      room.deadline = null;
+      room.waiting = [];
+      room.pauseUntil = 0;
+      room.lastStamp = null;
       afterChange(room);
     },
 
     act(p, msg) {
       const room = rooms.get(p.room);
       if (!room || room.status !== 'playing' || !room.game) return sendError(p, 'No game in progress');
+      if (isSpec(room, p.id)) return sendError(p, 'You are watching this game');
       const res = room.game.act(p.id, msg.action);
       if (!res.ok) {
         sendError(p, res.error || 'Not allowed');
@@ -328,6 +488,13 @@ function start(opts = {}) {
       clearTimeout(room.timer);
       room.game = null;
       room.status = 'lobby';
+      room.deadline = null;
+      // spectators take any free seat; the rest keep watching and can sit down when the host frees a seat
+      for (const s of room.spectators.slice()) {
+        if (room.members.length >= room.seats) break;
+        room.spectators.splice(room.spectators.indexOf(s), 1);
+        room.members.push({ id: s.id, name: s.name, avatar: s.avatar, bot: false });
+      }
       broadcast(room);
     },
   };
@@ -395,6 +562,7 @@ function start(opts = {}) {
     const room = rooms.get(p.room);
     if (room) {
       broadcast(room);
+      sendChatLog(p, room);
       schedule(room);
     } else p.room = null;
   }
@@ -458,7 +626,18 @@ function start(opts = {}) {
     for (const room of rooms.values()) {
       if (humans(room).some(isConnected)) room.idleSince = null;
       else if (!room.idleSince) room.idleSince = now;
-      else if (now - room.idleSince > 10 * 60 * 1000) destroyRoom(room);
+      else if (now - room.idleSince > 10 * 60 * 1000) {
+        destroyRoom(room);
+        continue;
+      }
+      // spectators who disappeared for a while are dropped
+      for (const s of room.spectators.slice()) {
+        const sp = players.get(s.id);
+        if (!sp || (!sp.connected && now - sp.lastSeen > 5 * 60 * 1000)) {
+          room.spectators.splice(room.spectators.indexOf(s), 1);
+          if (sp) sp.room = null;
+        }
+      }
     }
     for (const p of players.values()) {
       if (!p.connected && !rooms.has(p.room) && now - p.lastSeen > 60 * 60 * 1000) {

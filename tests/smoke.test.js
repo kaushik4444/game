@@ -22,7 +22,7 @@ function get(port, path) {
 
 /** Minimal client with a naive-but-legal strategy. */
 function client(port, name, token) {
-  const c = { name, last: null, room: null, view: null, errors: [], ws: new WebSocket(`ws://127.0.0.1:${port}/ws`), playing: false };
+  const c = { name, last: null, room: null, view: null, errors: [], chats: [], notices: [], ws: new WebSocket(`ws://127.0.0.1:${port}/ws`), playing: false };
   c.send = (m) => c.ws.send(JSON.stringify(m));
   c.waiters = [];
   c.until = (pred, label) =>
@@ -40,6 +40,8 @@ function client(port, name, token) {
     if (m.t === 'welcome') Object.assign(c, { id: m.id, token: m.token, games: m.games });
     if (m.t === 'state') { c.room = m.room; c.view = m.view; if (c.playing) c.step(); }
     if (m.t === 'error') c.errors.push(m.message);
+    if (m.t === 'chat') c.chats.push(m.m);
+    if (m.t === 'notice') c.notices.push(m.text);
     c.waiters = c.waiters.filter((w) => !w());
   });
   c.step = () => {
@@ -57,7 +59,7 @@ function client(port, name, token) {
 }
 
 (async () => {
-  const app = await start({ port: 0, botDelay: [0, 3], autoAdvanceMs: 20, absentMs: 150, maxMsgsPerSec: Infinity });
+  const app = await start({ port: 0, botDelay: [0, 3], autoAdvanceMs: 20, absentMs: 150, maxMsgsPerSec: Infinity, trickPauseMs: 0, forcedMs: 0 });
   const { port } = app;
 
   // --- static hosting
@@ -126,6 +128,25 @@ function client(port, name, token) {
   assert.ok(!JSON.stringify(a.view).includes('"hand":[{') || a.view.players.every((p) => p.hand === undefined));
   a.step(); b.step();
 
+  // --- someone joining a running game becomes a spectator; chat works for everybody
+  const sp = client(port, 'Sam');
+  await sp.until(() => sp.id, 'welcome S');
+  sp.send({ t: 'join', code: a.room.code });
+  await sp.until(() => sp.room && sp.view, 'spectator joined');
+  assert.equal(sp.view.me, -1);
+  assert.equal(sp.view.hand.length, 0);
+  assert.equal(sp.view.foresight.length, 0); // spectators must not see hidden cards
+  assert.equal(sp.room.members.length, 3);
+  assert.equal(sp.room.spectators.length, 1);
+  await a.until(() => a.room.spectators.length === 1 && a.notices.some((t) => /Sam/.test(t)), 'players are told about the spectator');
+  sp.send({ t: 'act', action: { type: 'bid', amount: 0 } });
+  await sp.until(() => sp.errors.some((e) => /watching/.test(e)), 'spectators cannot act');
+  sp.send({ t: 'chat', text: '  hello <b>table</b>  ' });
+  await a.until(() => a.chats.some((m) => m.name === 'Sam' && m.spec && m.text === 'hello <b>table</b>'), 'chat reaches players');
+  a.send({ t: 'chat', text: 'welcome Sam' });
+  await sp.until(() => sp.chats.some((m) => m.text === 'welcome Sam'), 'chat reaches spectators');
+  console.log('  ok  spectators join a running game and chat');
+
   // Alice drops mid-game and comes back with her token; Bob keeps playing.
   await a.until(() => a.view.round >= 2, 'round 2');
   const token = a.token;
@@ -192,6 +213,38 @@ function client(port, name, token) {
   console.log('  ok  seats setting, bot fill on start, second game registered');
   c.send({ t: 'leave' });
   c.ws.close();
+
+  // --- turn time limit: a bot plays for a human who does not act; "off" disables it
+  const fast = await start({ port: 0, botDelay: [0, 3], autoAdvanceMs: 20, absentMs: 60000, trickPauseMs: 0, forcedMs: 0, timeScale: 0.01, maxMsgsPerSec: Infinity });
+  const t = client(fast.port, 'Tina');
+  await t.until(() => t.id, 'welcome T');
+  t.send({ t: 'create', gameId: 'wizard' });
+  await t.until(() => t.room, 'T table');
+  t.send({ t: 'setSeats', seats: 3 });
+  t.send({ t: 'setOptions', options: { timeLimit: '20' } });
+  await t.until(() => t.room.options.timeLimit === '20', 'time limit set');
+  t.send({ t: 'start' });
+  await t.until(() => t.view && t.room.status === 'playing', 'T started');
+  await t.until(() => t.view.round >= 2, 'idle human is auto-played after the limit'); // Tina never acts
+  assert.ok(t.chats.some((m) => m.sys && /ran out of time/.test(m.text)));
+  assert.ok(t.notices.some((x) => /Time is up/.test(x)));
+  t.send({ t: 'rematch' }); // not the host-finished state: must be refused
+  const off = client(fast.port, 'Olga');
+  await off.until(() => off.id, 'welcome O');
+  off.send({ t: 'create', gameId: 'twentynine' });
+  await off.until(() => off.room, 'O table');
+  off.send({ t: 'setOptions', options: { timeLimit: 'off' } });
+  await off.until(() => off.room.options.timeLimit === 'off', 'limit off');
+  off.send({ t: 'start' });
+  await off.until(() => off.view && off.view.game === 'twentynine', 'O started');
+  assert.equal(off.room.deadline, null);
+  await new Promise((r) => setTimeout(r, 400));
+  assert.ok(off.view.phase === 'bidding' || off.view.phase === 'chooseTrump' || off.view.myTurn === false || off.view.myTurn === true);
+  assert.equal(off.view.hand.length, 4); // nothing was auto-played for Olga
+  t.ws.close();
+  off.ws.close();
+  await fast.close();
+  console.log('  ok  turn time limit auto-plays idle humans; off disables it');
 
   // --- leaving
   a2.send({ t: 'leave' });

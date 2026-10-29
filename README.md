@@ -7,6 +7,20 @@ Browser-based multiplayer card and board games. Phone or desktop, no install.
 
 Bots can fill any open seat.
 
+## What's new in v0.2
+
+- **Table chat**: 💬 button in the lobby and in games, unread badge, history kept for the table (last 60 messages). System lines announce spectators, players leaving and time-outs.
+- **Spectators**: anyone who joins with the code (or invite link) after the game has started watches instead. They never see hidden cards, cannot act, can chat, and everyone gets a toast, a chat line and a 👁 badge. After a rematch spectators take any free seat (or press *Take a seat* when the host frees one).
+- **Turn time limit**: new lobby option (default 60 s; 20 s to 2 min, or **No limit** to switch auto play off). A countdown shows in the status bar. When it runs out a bot plays for that player (in simultaneous bidding everyone still to bid is covered). Disconnected players are still covered by a bot after 15 s.
+- **Wizard bids vs tricks**: a strip above the table shows `Total bid 4 / 3 tricks (over by 1)` and tricks played. Hidden/secret prediction variants show how many bids are in without revealing them.
+- **Trick flow**: the card currently winning the trick is marked *Leading*; the finished trick stays on the table with the 👑 *Winner*, is swept to the winner, then the winner is asked to lead (the server holds bots back for the same moment so nobody plays into a trick that is still shown).
+- **Last trick auto play**: when everybody is down to one card, the first player plays and the remaining cards are played automatically (29: unless a player may still ask for the trump).
+- **New card sounds**: a swish + snap + thump for a played card, a riffle for dealing and a sweep when a trick is collected.
+
+## Roadmap (next phase)
+
+Poker, The Mind, Saboteur, and a Wizard score keeper for offline games with real cards.
+
 ## Run
 
 ```
@@ -35,7 +49,8 @@ WebSockets work on all of these with no extra setup, and the client switches to 
 
 ## How it works
 
-- `server.js`: static files, WebSocket lobby, rooms, bots, reconnection (token in the browser). State lives in memory.
+- `server.js`: static files, WebSocket lobby, rooms, chat, spectators, bots, turn timers, reconnection (token in the browser). State lives in memory.
+- `games/common.js`: options every game shares (turn time limit).
 - `games/<id>/`: one folder per game. `engine.js` is pure rules, `index.js` plugs it into the server. See `games/README.md`.
 - `public/`: vanilla JS client. `app.js` = home/lobby, `games/<id>.js` = that game's table.
 

@@ -121,6 +121,26 @@ test('trump suit is hidden from everyone but the bidder until revealed', () => {
   assert.equal(E.viewFor(g, 'p0').players.every((p) => p.hand === undefined), true);
 });
 
+test('last trick is forced after the first card, unless the player may still ask for the trump', () => {
+  const g = toPlaying(5);
+  g.players.forEach((p) => { p.hand = []; });
+  g.trumpSuit = 'S'; g.trumpRevealed = false; g.revealer = -1;
+  g.players[0].hand = [card('H', '7')];
+  g.players[1].hand = [card('H', '8')];
+  g.players[2].hand = [card('D', '9')]; // void in hearts, trump still hidden: may ask for the trump
+  g.players[3].hand = [card('H', 'J')];
+  g.turn = 0; g.trick = [];
+  assert.equal(E.forcedPlay(g), null);
+  assert.equal(E.applyAction(g, 'p0', { type: 'play', cardId: 'H7' }).ok, true);
+  assert.equal(E.viewFor(g, 'p2').trickLeader, 0);
+  assert.equal(E.forcedPlay(g).playerId, 'p1');
+  E.applyAction(g, 'p1', E.forcedPlay(g).action);
+  assert.equal(E.viewFor(g, 'p1').trickLeader, 1);
+  assert.equal(E.forcedPlay(g), null); // p2 can still reveal
+  assert.equal(E.viewFor(g, 'p2').autoPlay, false);
+  assert.equal(E.viewFor(g, 'spectator').me, -1);
+});
+
 console.log('29 simulation');
 
 test('200 full games: every hand distributes exactly 29 points and scores add up', () => {

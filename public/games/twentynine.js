@@ -20,6 +20,10 @@
   }
   const suitPill = (s) => `<span class="pill ${SUITS[s].cls}"><b>${SUITS[s].sym}</b> ${SUITS[s].name}</span>`;
   const teamOf = (i) => i % 2;
+  // Spectators have no seat (me = -1): treat Team A as "us".
+  const myTeam = (v) => (v.me >= 0 ? teamOf(v.me) : 0);
+  const usName = (v) => (v.me >= 0 ? 'Your team' : 'Team A');
+  const themName = (v) => (v.me >= 0 ? 'Opponents' : 'Team B');
 
   function sizes(v) {
     const w = window.innerWidth;
@@ -35,12 +39,15 @@
   }
 
   function relation(v, i) {
+    if (v.me < 0) return teamOf(i) === 0 ? 'Team A' : 'Team B';
     if (i === v.me) return 'You';
     return teamOf(i) === teamOf(v.me) ? 'Partner' : 'Opponent';
   }
 
   function statusText(v) {
     const name = (i) => esc(v.players[i].name);
+    if (v._hold && v.lastTrick) return `${name(v.lastTrick.winner)} wins the trick${v.lastTrick.points ? ' (' + v.lastTrick.points + ' pt' + (v.lastTrick.points > 1 ? 's' : '') + ')' : ''}!`;
+    if (v.phase === 'playing' && v.autoPlay) return 'Last cards: yours is played automatically…';
     switch (v.phase) {
       case 'bidding':
         return v.myTurn ? `Your bid: ${v.minBid} to ${v.maxBid}, or pass` : `${name(v.turn)} is bidding…`;
@@ -50,6 +57,7 @@
         if (v.myTurn) {
           if (v.canReveal) return 'You can’t follow suit. Show the trump, or discard.';
           if (v.mustTrump) return 'Trump is shown. Play a trump card.';
+          if (!v.trick.length && v.lastTrick && v.lastTrick.winner === v.me) return 'You won the trick! Your turn to lead.';
           return wonPrefix(v) + (ui.selected ? 'Tap the card again, or press Play' : 'Your turn. Pick a card.');
         }
         return wonPrefix(v) + `${name(v.turn)} is playing…`;
@@ -67,13 +75,13 @@
   }
 
   function scoreStrip(v) {
-    const mine = teamOf(v.me);
+    const mine = myTeam(v);
     const us = mine, them = 1 - mine;
     const bid = v.highBidder >= 0 && v.phase !== 'bidding' ? `<span class="bidinfo">Bid ${v.highBid} by ${esc(v.players[v.highBidder].name)}</span>` : '';
     return `<div class="t29-strip">
-      <div class="tbox us"><span class="label">Your team</span><b>${v.teamScore[us]}</b><small>game pts · hand ${v.handPoints[us]}</small></div>
+      <div class="tbox us"><span class="label">${usName(v)}</span><b>${v.teamScore[us]}</b><small>game pts · hand ${v.handPoints[us]}</small></div>
       ${bid}
-      <div class="tbox them"><span class="label">Opponents</span><b>${v.teamScore[them]}</b><small>game pts · hand ${v.handPoints[them]}</small></div>
+      <div class="tbox them"><span class="label">${themName(v)}</span><b>${v.teamScore[them]}</b><small>game pts · hand ${v.handPoints[them]}</small></div>
     </div>`;
   }
 
@@ -82,7 +90,7 @@
     const turn = v.turn === i;
     const b = v.bids[i];
     const sub = v.phase === 'bidding' ? (b === null ? (turn ? 'bidding…' : 'waiting') : b === 'pass' ? 'passed' : `bid ${b}`) : v.highBidder === i ? `bidder · ${v.highBid}` : relation(v, i);
-    return pt.seatHTML({ pid: p.id, name: p.name, avatar: pt.avatarOf(ctx.room, p.id), sub, turn, dealer: i === v.dealer, first: i === (v.dealer + 1) % 4, me: i === v.me, team: teamOf(i) === teamOf(v.me) ? 0 : 1 });
+    return pt.seatHTML({ pid: p.id, name: p.name, avatar: pt.avatarOf(ctx.room, p.id), sub, turn, dealer: i === v.dealer, first: i === (v.dealer + 1) % 4, me: i === v.me, team: teamOf(i) === myTeam(v) ? 0 : 1 });
   }
 
   function cornerHTML(v) {
@@ -108,9 +116,10 @@
       n: 4,
       me: v.me,
       seat: (i) => seatHTML(v, ctx, i),
+      collect: v._hold === 'sweep' ? v.lastTrick.winner : undefined,
       card: (i) => {
         const t = shown.find((x) => x.player === i);
-        return t ? { html: cardHTML(t.card, { cls: live && !ui.prevTrick.has(t.card.id) ? 'pop' : '' }), win: i === winner } : null;
+        return t ? { html: cardHTML(t.card, { cls: !ui.prevTrick.has(t.card.id) ? 'pop' : '' }), win: i === winner, lead: live && i === v.trickLeader } : null;
       },
       corner: cornerHTML(v),
     });
@@ -148,11 +157,11 @@
   }
 
   function historyTable(v) {
-    const mine = teamOf(v.me);
+    const mine = myTeam(v);
     const rows = v.history
       .map((h) => {
         const t = teamOf(h.bidder);
-        return `<tr><td>#${h.hand}</td><td>${esc(v.players[h.bidder].name)}</td><td>${h.bid}</td><td>${SUITS[h.trumpSuit].sym}</td><td>${h.points[mine]}–${h.points[1 - mine]}</td><td class="${h.made ? 'pos' : 'neg'}">${t === mine ? (h.made ? '+1 us' : '−1 us') : h.made ? '+1 them' : '−1 them'}</td></tr>`;
+        return `<tr><td>#${h.hand}</td><td>${esc(v.players[h.bidder].name)}</td><td>${h.bid}</td><td>${SUITS[h.trumpSuit].sym}</td><td>${h.points[mine]}–${h.points[1 - mine]}</td><td class="${h.made ? 'pos' : 'neg'}">${t === mine ? (h.made ? '+1 ' + (v.me >= 0 ? 'us' : 'A') : '−1 ' + (v.me >= 0 ? 'us' : 'A')) : h.made ? '+1 ' + (v.me >= 0 ? 'them' : 'B') : '−1 ' + (v.me >= 0 ? 'them' : 'B')}</td></tr>`;
       })
       .join('');
     return `<div class="score-wrap"><table class="score"><thead><tr><th>Hand</th><th>Bidder</th><th>Bid</th><th>Trump</th><th>Points (us–them)</th><th>Result</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="hint">No hands finished yet</td></tr>'}</tbody></table></div>`;
@@ -165,20 +174,23 @@
     const key = v.phase + ':' + v.handNo;
     if ((v.phase !== 'handEnd' && v.phase !== 'gameOver') || ui.shownKey !== key) return '';
     const h = v.history[v.history.length - 1];
-    const mine = teamOf(v.me);
+    const mine = myTeam(v);
     const bidderMine = teamOf(h.bidder) === mine;
-    const result = `<p><b>${esc(v.players[h.bidder].name)}</b> (${bidderMine ? 'your team' : 'opponents'}) bid <b>${h.bid}</b> with trump ${SUITS[h.trumpSuit].sym} and took <b>${h.points[teamOf(h.bidder)]}</b> points: <b class="${h.made ? 'pos' : 'neg'}">${h.made ? 'bid made' : 'bid failed'}</b>.</p>
-      <p>Hand points: your team ${h.points[mine]}, opponents ${h.points[1 - mine]}.<br>Game points: your team <b>${h.score[mine]}</b>, opponents <b>${h.score[1 - mine]}</b>.</p>`;
+    const result = `<p><b>${esc(v.players[h.bidder].name)}</b> (${bidderMine ? usName(v).toLowerCase() : themName(v).toLowerCase()}) bid <b>${h.bid}</b> with trump ${SUITS[h.trumpSuit].sym} and took <b>${h.points[teamOf(h.bidder)]}</b> points: <b class="${h.made ? 'pos' : 'neg'}">${h.made ? 'bid made' : 'bid failed'}</b>.</p>
+      <p>Hand points: ${usName(v).toLowerCase()} ${h.points[mine]}, ${themName(v).toLowerCase()} ${h.points[1 - mine]}.<br>Game points: ${usName(v).toLowerCase()} <b>${h.score[mine]}</b>, ${themName(v).toLowerCase()} <b>${h.score[1 - mine]}</b>.</p>`;
     if (v.phase === 'handEnd') {
       return `<div class="overlay"><div class="sheet"><h2>Hand ${v.handNo} complete</h2>${result}<div class="row" style="margin-top:12px"><button class="btn" data-t9="next">Next hand</button><span class="hint">Starts automatically in a few seconds</span></div></div></div>`;
     }
     const won = v.winnerTeam === mine;
-    return `<div class="overlay"><div class="sheet"><h2>${won ? 'Your team won! 🎉' : 'Your team lost'}</h2>${result}
+    const title = v.me < 0 ? `${v.winnerTeam === 0 ? 'Team A' : 'Team B'} won!` : won ? 'Your team won! 🎉' : 'Your team lost';
+    return `<div class="overlay"><div class="sheet"><h2>${title}</h2>${result}
       <div class="row">${ui.ctx.isHost ? '<button class="btn" data-t9="again">Play again</button>' : '<span class="hint">Waiting for the host to start another game</span>'}
       <button class="btn ghost" data-t9="scores">Full scoreboard</button><button class="btn ghost" data-t9="leave">Leave table</button></div></div></div>`;
   }
 
-  function render(root, v, ctx) {
+  function render(root, view, ctx) {
+    const hold = pt.trickHold(view, ctx.rerender);
+    const v = Object.assign({}, view, { myTurn: view.myTurn && !hold.active, _hold: hold.active ? hold.phase : null });
     ui.ctx = ctx;
     ui.latest = v;
     if (v.handNo !== ui.hand) {
@@ -199,19 +211,19 @@
           ui.shownKey = key;
           ui.ctx.rerender();
         }
-      }, 1600);
+      }, 2100);
     }
 
     const handEl = root.querySelector('.hand');
     const scroll = handEl ? handEl.scrollLeft : 0;
     const z = sizes(v);
-    const canPlay = v.phase === 'playing' && v.myTurn && ui.selected;
+    const canPlay = v.phase === 'playing' && v.myTurn && ui.selected && !v.autoPlay;
     root.innerHTML = `
     <div class="wz t29" style="--cw:${z.cw}px;--tcw:${z.tcw}px;--cw0:${z.cw}px">
       <div class="wz-top">
         <div class="wz-round"><b>Hand ${v.handNo}</b><span class="label"> · to ${v.options.target}</span></div>
         <div class="wz-trump">${trumpHTML(v)}</div>
-        <div class="row" style="gap:6px">${CardTable.sound.button()}<button class="btn ghost small" data-act="emotes" aria-label="Send a reaction">😀</button><button class="btn ghost small" data-t9="scores">Scores</button><button class="btn ghost small" data-t9="leave" aria-label="Leave table">✕</button></div>
+        <div class="row" style="gap:6px">${CardTable.sound.button()}${CardTable.chat.button()}<button class="btn ghost small" data-act="emotes" aria-label="Send a reaction">😀</button><button class="btn ghost small" data-t9="scores">Scores</button><button class="btn ghost small" data-t9="leave" aria-label="Leave table">✕</button></div>
       </div>
       ${scoreStrip(v)}
       ${tableHTML(v, ctx)}
@@ -240,6 +252,8 @@
         const card = v.hand.find((c) => c.id === el.dataset.id);
         if (!card) return;
         if (v.phase !== 'playing') return toast(v.phase === 'bidding' ? 'Bidding comes first' : v.phase === 'chooseTrump' ? 'Trump is being chosen' : 'Wait for the next hand');
+        if (v._hold) return toast('The trick is being collected…');
+        if (v.autoPlay) return toast('Your last card is played automatically');
         if (!v.myTurn) return toast('Not your turn yet');
         if (!v.legal.includes(card.id)) return toast(v.mustTrump ? 'You must play a trump card' : 'You must follow the lead suit if you can');
         if (ui.selected === card.id) {

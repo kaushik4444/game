@@ -32,6 +32,8 @@
 
   function statusText(v) {
     const name = (i) => esc(v.players[i].name);
+    if (v._hold && v.lastTrick) return `${name(v.lastTrick.winner)} wins the trick!`;
+    if (v.phase === 'playing' && v.autoPlay) return 'Last cards: yours is played automatically…';
     if (v.phase === 'chooseTrump') return v.myTurn ? 'A wizard was turned up. Choose the trump suit.' : `${name(v.dealer)} is choosing trump…`;
     if (v.phase === 'bidding' && v.simultaneous) {
       const waiting = v.players.filter((p) => !p.hasBid).length;
@@ -39,7 +41,10 @@
     }
     if (v.phase === 'bidding') return v.myTurn ? 'Your bid: how many tricks will you win?' : `${name(v.turn)} is bidding…`;
     if (v.phase === 'playing') {
-      if (v.myTurn) return wonPrefix(v) + (ui.selected ? 'Tap the card again, or press Play' : 'Your turn. Pick a card.');
+      if (v.myTurn) {
+        if (!v.trick.length && v.lastTrick && v.lastTrick.winner === v.me) return 'You won the trick! Your turn to lead.';
+        return wonPrefix(v) + (ui.selected ? 'Tap the card again, or press Play' : 'Your turn. Pick a card.');
+      }
       return wonPrefix(v) + `${name(v.turn)} is playing…`;
     }
     if (v.phase === 'roundEnd') return 'Round complete';
@@ -80,15 +85,35 @@
       n: v.n,
       me: v.me,
       seat: (i) => seatsHTML(v, ctx, i),
+      collect: v._hold === 'sweep' ? v.lastTrick.winner : undefined,
       card: (i) => {
         const t = shown.find((x) => x.player === i);
-        return t ? { html: cardHTML(t.card, { cls: live && !ui.prevTrick.has(t.card.id) ? 'pop' : '' }), win: i === winner } : null;
+        return t ? { html: cardHTML(t.card, { cls: !ui.prevTrick.has(t.card.id) ? 'pop' : '' }), win: i === winner, lead: live && i === v.trickLeader } : null;
       },
       corner: cornerHTML(v),
       info: `<span>${esc(VARIANT_NAMES[v.options.variant])}${v.options.foresight ? ' · Foresight' : ''}</span><span>Round ${v.round} / ${v.totalRounds}</span>`,
     });
     ui.prevTrick = ids;
     return html;
+  }
+
+  /** "Total bid 4 / 3 tricks": how the bids compare with the tricks available this round. */
+  function bidStrip(v) {
+    const tricks = v.round;
+    const won = v.players.reduce((s, p) => s + p.tricks, 0);
+    const hidden = v.players.some((p) => p.hasBid && p.bid === null);
+    const placed = v.players.filter((p) => p.hasBid).length;
+    let bids;
+    if (hidden) bids = `<b>${placed}</b> of ${v.n} bids placed (hidden)`;
+    else if (placed < v.n) bids = `Bids so far <b>${v.players.reduce((s, p) => s + (p.bid || 0), 0)}</b> (${placed}/${v.n})`;
+    else {
+      const total = v.players.reduce((s, p) => s + p.bid, 0);
+      const diff = total - tricks;
+      const tag = diff === 0 ? 'exactly even' : diff > 0 ? `over by ${diff}` : `under by ${-diff}`;
+      bids = `Total bid <b class="${diff === 0 ? 'neg' : ''}">${total}</b> / <b>${tricks}</b> tricks <span class="muted">(${tag})</span>`;
+    }
+    const tail = placed < v.n || hidden ? ` / <b>${tricks}</b> tricks` : '';
+    return `<div class="wz-bids"><span>${bids}${tail}</span><span>Tricks played <b>${won}</b> / ${tricks}</span></div>`;
   }
 
   function controlsHTML(v) {
@@ -169,7 +194,9 @@
       <button class="btn ghost" data-wz="scores">Full scoreboard</button><button class="btn ghost" data-wz="leave">Leave table</button></div></div></div>`;
   }
 
-  function render(root, v, ctx) {
+  function render(root, view, ctx) {
+    const hold = pt.trickHold(view, ctx.rerender);
+    const v = Object.assign({}, view, { myTurn: view.myTurn && !hold.active, _hold: hold.active ? hold.phase : null });
     ui.ctx = ctx;
     ui.latest = v;
     if (v.round !== ui.round) {
@@ -192,21 +219,22 @@
           ui.shownKey = key;
           ui.ctx.rerender();
         }
-      }, 1600);
+      }, 2100);
     }
 
     const handEl = root.querySelector('.hand');
     const scroll = handEl ? handEl.scrollLeft : 0;
     const z = sizes(v);
-    const canPlay = v.phase === 'playing' && v.myTurn && ui.selected;
+    const canPlay = v.phase === 'playing' && v.myTurn && ui.selected && !v.autoPlay;
     const trump = v.trumpSuit ? suitPill(v.trumpSuit) : '<b>No trump</b>';
     root.innerHTML = `
     <div class="wz" style="--cw:${z.cw}px;--tcw:${z.tcw}px;--cw0:${z.cw}px">
       <div class="wz-top">
         <div class="wz-round"><b>Round ${v.round}</b><span class="label"> / ${v.totalRounds}</span></div>
         <div class="wz-trump">${v.phase === 'chooseTrump' ? '<span class="label">Trump: dealer picks</span>' : `<span class="label">Trump</span> ${trump}`}</div>
-        <div class="row" style="gap:6px">${CardTable.sound.button()}<button class="btn ghost small" data-act="emotes" aria-label="Send a reaction">😀</button><button class="btn ghost small" data-wz="scores">Scores</button><button class="btn ghost small" data-wz="leave" aria-label="Leave table">✕</button></div>
+        <div class="row" style="gap:6px">${CardTable.sound.button()}${CardTable.chat.button()}<button class="btn ghost small" data-act="emotes" aria-label="Send a reaction">😀</button><button class="btn ghost small" data-wz="scores">Scores</button><button class="btn ghost small" data-wz="leave" aria-label="Leave table">✕</button></div>
       </div>
+      ${bidStrip(v)}
       ${tableHTML(v, ctx, z)}
       <div class="wz-status ${v.myTurn ? 'mine' : ''}"><span>${statusText(v)}</span>${canPlay ? '<button class="btn small" data-wz="play">Play</button>' : ''}</div>
       ${controlsHTML(v)}
@@ -231,6 +259,8 @@
         const card = v.hand.find((c) => c.id === el.dataset.id);
         if (!card) return;
         if (v.phase !== 'playing') return toast(v.phase === 'bidding' ? 'Place your bid first' : 'Wait for the next round');
+        if (v._hold) return toast('The trick is being collected…');
+        if (v.autoPlay) return toast('Your last card is played automatically');
         if (!v.myTurn) return toast('Not your turn yet');
         if (!v.legal.includes(card.id)) return toast('You must follow the lead suit if you can');
         if (ui.selected === card.id) {

@@ -200,6 +200,17 @@ function applyAction(g, playerId, action) {
   }
 }
 
+/**
+ * Last trick of a round: every player holds exactly one card, so once the first card is down the rest is
+ * forced. Returns { playerId, action } for the player whose turn it is, or null.
+ */
+function forcedPlay(g) {
+  if (g.phase !== 'playing' || !g.trick.length) return null;
+  const p = g.players[g.turn];
+  if (!p || p.hand.length !== 1) return null;
+  return { playerId: p.id, action: { type: 'play', cardId: p.hand[0].id } };
+}
+
 /** Everyone the game is waiting for (several players at once during simultaneous bidding). */
 function awaitingList(g) {
   if (g.phase === 'bidding' && isSimul(g)) return g.players.filter((p) => p.bid === null).map((p) => p.id);
@@ -228,7 +239,7 @@ function viewFor(g, playerId) {
   const real = me >= 0 ? g.players[me].hand : [];
   const hand = blind ? [{ id: 'hidden', type: 'back' }] : real;
   const legal = myTurnToPlay ? (blind ? ['hidden'] : legalCards(real, g.trick).map((c) => c.id)) : [];
-  const others = foresightActive(g)
+  const others = foresightActive(g) && me >= 0
     ? g.players.map((p, i) => ({ player: i, card: i !== me && p.hand.length === 1 ? p.hand[0] : null })).filter((x) => x.card)
     : [];
   const bidding = g.phase === 'bidding';
@@ -247,6 +258,9 @@ function viewFor(g, playerId) {
     trumpCard: g.trumpCard,
     trumpSuit: g.trumpSuit,
     trick: g.trick,
+    trickLeader: g.trick.length && g.phase === 'playing' ? trickWinner(g.trick, g.trumpSuit) : null, // who is winning the trick so far
+    trickNo: g.players.reduce((s, p) => s + p.tricks, 0), // tricks finished this round
+    autoPlay: me >= 0 && me === g.turn && forcedPlay(g) !== null, // your last card is played for you
     lastTrick: g.lastTrick,
     hand,
     legal,
@@ -342,6 +356,7 @@ module.exports = {
   awaitingList,
   viewFor,
   botAction,
+  forcedPlay,
   // exported for tests
   ledSuit,
   legalCards,

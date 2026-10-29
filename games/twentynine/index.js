@@ -1,5 +1,6 @@
 'use strict';
 const engine = require('./engine');
+const { TIME_LIMIT_OPTION } = require('../common');
 
 module.exports = {
   id: 'twentynine',
@@ -21,6 +22,7 @@ module.exports = {
         { value: '9', label: '9 game points', desc: 'A long evening.' },
       ],
     },
+    TIME_LIMIT_OPTION,
   ],
   rules: [
     'Four players, two teams: you and the player sitting opposite are partners. 32 cards (7 to Ace). Card order, high to low: J, 9, A, 10, K, Q, 8, 7.',
@@ -38,6 +40,8 @@ module.exports = {
       act: (playerId, action) => engine.applyAction(g, playerId, action),
       awaiting: () => engine.awaiting(g),
       botAction: (playerId) => engine.botAction(g, playerId),
+      forcedPlay: () => engine.forcedPlay(g),
+      stamp: () => g.lastTrick, // changes whenever a trick is completed
       autoAction: () => (g.phase === 'handEnd' ? { type: 'continue' } : null),
       isOver: () => g.phase === 'gameOver',
     };

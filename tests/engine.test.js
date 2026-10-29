@@ -214,6 +214,37 @@ test('views never leak other players\' hands', () => {
   assert.equal(E.viewFor(g, 'spectator').hand.length, 0);
 });
 
+test('last trick: after the first card the rest is forced; trickLeader tracks the winning card', () => {
+  const g = E.createGame(people(3), {}, mulberry32(11));
+  g.round = 1; g.phase = 'playing'; g.trumpSuit = 'G'; g.turn = 0; g.dealer = 2;
+  g.players.forEach((p) => { p.bid = 0; p.tricks = 0; });
+  g.players[0].hand = [num('R', 5)];
+  g.players[1].hand = [num('R', 9)];
+  g.players[2].hand = [num('G', 2)];
+  assert.equal(E.forcedPlay(g), null); // the leader still plays by hand
+  assert.equal(E.viewFor(g, 'p0').autoPlay, false);
+  assert.equal(E.viewFor(g, 'p0').trickLeader, null);
+  assert.equal(E.applyAction(g, 'p0', { type: 'play', cardId: 'R5' }).ok, true);
+  assert.deepEqual(E.forcedPlay(g), { playerId: 'p1', action: { type: 'play', cardId: 'R9' } });
+  assert.equal(E.viewFor(g, 'p1').autoPlay, true);
+  assert.equal(E.viewFor(g, 'p2').autoPlay, false);
+  assert.equal(E.viewFor(g, 'p2').trickLeader, 0);
+  E.applyAction(g, 'p1', E.forcedPlay(g).action);
+  assert.equal(E.viewFor(g, 'p2').trickLeader, 1);
+  E.applyAction(g, 'p2', E.forcedPlay(g).action);
+  assert.equal(g.lastTrick.winner, 2); // trump 2 beats the reds
+  assert.equal(E.forcedPlay(g), null);
+});
+
+test('spectators (unknown player ids) see no hands and no foresight cards', () => {
+  const g = E.createGame(people(4), { foresight: true }, mulberry32(8));
+  const v = E.viewFor(g, 'watcher');
+  assert.equal(v.me, -1);
+  assert.equal(v.hand.length, 0);
+  assert.equal(v.foresight.length, 0);
+  assert.equal(v.myTurn, false);
+});
+
 console.log('variants');
 
 function playOut(g) {

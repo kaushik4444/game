@@ -110,6 +110,17 @@ function canReveal(g, seat) {
   return !g.players[seat].hand.some((c) => c.suit === led);
 }
 
+/**
+ * Last trick of a hand: everybody holds one card. After the first card is down the rest play automatically,
+ * except a player who may still ask for the trump to be shown (that choice can change the winner).
+ */
+function forcedPlay(g) {
+  if (g.phase !== 'playing' || !g.trick.length) return null;
+  const p = g.players[g.turn];
+  if (!p || p.hand.length !== 1 || canReveal(g, g.turn)) return null;
+  return { playerId: p.id, action: { type: 'play', cardId: p.hand[0].id } };
+}
+
 const ok = () => ({ ok: true });
 const fail = (error) => ({ ok: false, error });
 
@@ -235,6 +246,9 @@ function viewFor(g, playerId) {
     trumpSuit: knowsTrump ? g.trumpSuit : null,
     trumpRevealed: g.trumpRevealed,
     trick: g.trick,
+    trickLeader: g.trick.length && g.phase === 'playing' ? trickWinner(g.trick) : null, // who is winning the trick so far (public info only)
+    trickNo: g.tricksPlayed,
+    autoPlay: me >= 0 && me === g.turn && forcedPlay(g) !== null,
     lastTrick: g.lastTrick,
     tricksPlayed: g.tricksPlayed,
     handPoints: g.handPoints,
@@ -312,4 +326,4 @@ function botAction(g, playerId) {
   return { type: 'play', cardId: pick.id };
 }
 
-module.exports = { SUITS, RANKS, buildDeck, createGame, applyAction, awaiting, viewFor, botAction, trickWinner, legalCards, canReveal, MIN_BID, MAX_BID };
+module.exports = { forcedPlay, SUITS, RANKS, buildDeck, createGame, applyAction, awaiting, viewFor, botAction, trickWinner, legalCards, canReveal, MIN_BID, MAX_BID };

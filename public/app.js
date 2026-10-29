@@ -26,6 +26,10 @@
     emotes: [],
     named: !!store.get('ct_name'),
     invite: '',
+    chat: [],
+    chatOpen: false,
+    unread: 0,
+    skew: 0, // server clock minus this device's clock, for the turn countdown
   };
   const plugins = {};
   let ws = null;
@@ -41,7 +45,16 @@
     setTimeout(() => el.remove(), 3200);
   }
 
-  window.CardTable = Object.assign(window.CardTable || {}, { esc, toast, register: (id, p) => { plugins[id] = p; } });
+  const isSpectator = () => !!(S.room && (S.room.spectators || []).some((s) => s.id === S.id));
+
+  window.CardTable = Object.assign(window.CardTable || {}, {
+    esc,
+    toast,
+    register: (id, p) => { plugins[id] = p; },
+    chat: {
+      button: () => `<button class="btn ghost small chat-btn" data-act="chat" aria-label="Open chat">💬<span class="cb" ${S.unread ? '' : 'hidden'}>${S.unread}</span></button>`,
+    },
+  });
 
   const gameMeta = (id) => S.games.find((g) => g.id === id);
   const inviteUrl = () => `${location.origin}/#${S.room.code}`;
@@ -51,7 +64,7 @@
     const g = gameMeta(gameId);
     if (!g) return;
     const variants = (g.options || [])
-      .filter((o) => o.type === 'select' || o.desc)
+      .filter((o) => (o.type === 'select' || o.desc) && !o.noRules)
       .map((o) => {
         if (o.type === 'boolean') return `<dt>${esc(o.label)}</dt><dd>${esc(o.desc)}</dd>`;
         return o.choices.filter((c) => c.value !== o.default || o.choices.length > 2).map((c) => `<dt>${esc(o.label)}: ${esc(c.label)}</dt><dd>${esc(c.desc)}</dd>`).join('');
@@ -129,10 +142,23 @@
         showEmote(m.id, m.e);
         CardTable.sound.play('emote');
         break;
+      case 'chat':
+        onChat(m.m);
+        break;
+      case 'chatlog':
+        S.chat = m.messages || [];
+        S.unread = 0;
+        drawChat();
+        updateBadges();
+        break;
+      case 'notice':
+        toast(m.text);
+        break;
       case 'state': {
         S.room = m.room;
         S.view = m.view;
         S.invite = '';
+        S.skew = (m.room.now || Date.now()) - Date.now();
         setHash(m.room.code);
         soundsFor(prevView, m.view);
         prevView = m.view;
@@ -148,6 +174,9 @@
       case 'left':
         S.room = null;
         S.view = null;
+        S.chat = [];
+        S.unread = 0;
+        closeChat();
         wasMyTurn = false;
         setHash('');
         render();
@@ -196,7 +225,9 @@
     } else if (b.trick && a.trick && b.trick.length > a.trick.length) snd.play('card');
     else if (b.phase === 'bidding' && bidSig(a) !== bidSig(b)) snd.play('tick');
     else if (a.phase !== b.phase && (b.phase === 'bidding' || b.phase === 'playing') && !(b.trick && b.trick.length)) snd.play('deal');
-    if (b.myTurn && !a.myTurn) setTimeout(() => snd.play('turn'), 220);
+    // after a finished trick the winner is asked to lead only once the cards have been collected
+    const trickDone = b.lastTrick && b.trick && !b.trick.length && (!a.lastTrick || a.trickNo !== b.trickNo || a.round !== b.round || a.handNo !== b.handNo);
+    if (b.myTurn && (!a.myTurn || trickDone)) setTimeout(() => snd.play('turn'), trickDone ? CardTable.TRICK_HOLD_MS + 80 : 220);
   }
 
   function showEmote(id, e) {
@@ -229,6 +260,104 @@
     }), 0);
   }
 
+  // ------------------------------------------------------------ chat, watchers, turn timer
+  const $chat = document.createElement('div');
+  $chat.id = 'chat';
+  $chat.className = 'chat';
+  $chat.hidden = true;
+  $chat.innerHTML = `<div class="chat-head"><b>Table chat</b><span class="chat-watch"></span><button type="button" class="chat-x" data-chat="close" aria-label="Close chat">✕</button></div>
+    <div class="chat-list" id="chat-list" aria-live="polite"></div>
+    <form class="chat-form" id="chat-form"><input id="chat-input" type="text" maxlength="200" placeholder="Say something…" autocomplete="off"><button class="btn small" type="submit">Send</button></form>`;
+  document.body.appendChild($chat);
+  const $watch = document.createElement('button');
+  $watch.id = 'watchers';
+  $watch.type = 'button';
+  $watch.className = 'watchers';
+  $watch.hidden = true;
+  document.body.appendChild($watch);
+
+  function msgHTML(m) {
+    if (m.sys) return `<div class="msg sys">${esc(m.text)}</div>`;
+    const mine = m.id === S.id;
+    return `<div class="msg ${mine ? 'mine' : ''}"><span class="mav" style="background:${avatarColor(m.name)}">${m.avatar ? esc(m.avatar) : initial(m.name)}</span><div class="mb"><b>${esc(m.name)}${m.spec ? ' <i title="Spectator">👁</i>' : ''}</b><p>${esc(m.text)}</p></div></div>`;
+  }
+  function drawChat() {
+    const list = document.getElementById('chat-list');
+    if (!list) return;
+    list.innerHTML = S.chat.length ? S.chat.map(msgHTML).join('') : '<p class="hint">No messages yet. Say hello!</p>';
+    list.scrollTop = list.scrollHeight;
+    const w = S.room && S.room.spectators && S.room.spectators.length ? `👁 ${S.room.spectators.map((x) => esc(x.name)).join(', ')} watching` : '';
+    $chat.querySelector('.chat-watch').innerHTML = w;
+  }
+  function updateBadges() {
+    document.querySelectorAll('[data-act="chat"] .cb').forEach((el) => {
+      el.textContent = S.unread;
+      el.hidden = !S.unread;
+    });
+  }
+  function onChat(m) {
+    S.chat.push(m);
+    if (S.chat.length > 60) S.chat.shift();
+    if (S.chatOpen) drawChat();
+    else if (!m.sys && m.id !== S.id) {
+      S.unread++;
+      updateBadges();
+      CardTable.sound.play('chat');
+    }
+  }
+  function openChat() {
+    S.chatOpen = true;
+    S.unread = 0;
+    $chat.hidden = false;
+    drawChat();
+    updateBadges();
+    const inp = document.getElementById('chat-input');
+    if (inp && !matchMedia('(pointer: coarse)').matches) inp.focus();
+  }
+  function closeChat() {
+    S.chatOpen = false;
+    $chat.hidden = true;
+  }
+  $chat.addEventListener('click', (e) => { if (e.target.closest('[data-chat="close"]')) closeChat(); });
+  $chat.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const inp = document.getElementById('chat-input');
+    const text = inp.value.trim();
+    if (text) send({ t: 'chat', text });
+    inp.value = '';
+  });
+  $watch.addEventListener('click', openChat);
+
+  function updateWatchers() {
+    const sp = (S.room && S.room.spectators) || [];
+    if (!S.room || !sp.length) {
+      $watch.hidden = true;
+      return;
+    }
+    const names = sp.map((x) => x.name);
+    const shown = names.length > 2 ? `${names.slice(0, 2).join(', ')} +${names.length - 2}` : names.join(', ');
+    $watch.textContent = isSpectator() ? `👁 You are watching · ${sp.length} spectator${sp.length === 1 ? '' : 's'}` : `👁 ${shown} watching`;
+    $watch.hidden = false;
+  }
+
+  let lastTickSec = -1;
+  function updateTimer() {
+    const dl = S.room && S.room.status === 'playing' ? S.room.deadline : null;
+    const left = dl ? Math.max(0, Math.ceil((dl - (Date.now() + S.skew)) / 1000)) : null;
+    document.querySelectorAll('.ct-timer').forEach((el) => {
+      if (left === null) {
+        el.hidden = true;
+        return;
+      }
+      el.hidden = false;
+      el.textContent = `⏱ ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+      el.classList.toggle('warn', left <= 10);
+    });
+    if (left !== null && left <= 5 && left > 0 && left !== lastTickSec && S.view && S.view.myTurn) CardTable.sound.play('tick');
+    lastTickSec = left === null ? -1 : left;
+  }
+  setInterval(updateTimer, 500);
+
   const range = (s) => (s.min === s.max ? `${s.min} players` : `${s.min}–${s.max} players`);
 
   function render() {
@@ -241,6 +370,8 @@
     else if (!S.room) renderHome();
     else if (S.room.status === 'lobby') renderLobby();
     else renderGame();
+    updateWatchers();
+    if ($chat && S.chatOpen) drawChat();
     if (keep) {
       const el = document.getElementById('name');
       if (el) {
@@ -322,6 +453,7 @@
     const isHost = r.hostId === S.id;
     const n = r.members.length;
     const open = r.seats - n;
+    const spectating = isSpectator();
     const seats = [];
     for (let i = 0; i < r.seats; i++) {
       const m = r.members[i];
@@ -354,8 +486,10 @@
       <div class="row" style="justify-content:space-between">
         <button class="btn ghost small" data-act="leave">← Leave</button>
         <h2>${esc(g.icon)} ${esc(g.name)}</h2>
-        <button class="btn ghost small" data-act="rules" data-game="${esc(r.gameId)}">Rules</button>
+        <span class="row" style="gap:6px">${CardTable.chat.button()}<button class="btn ghost small" data-act="rules" data-game="${esc(r.gameId)}">Rules</button></span>
       </div>
+      ${spectating ? `<section class="panel"><h3>👁 You are watching</h3><p class="hint" style="text-align:left;margin:6px 0 10px">The next game starts when the host presses Start. ${open > 0 ? 'There is an open seat if you want to play.' : 'Ask the host to free a seat if you want to play.'}</p>${open > 0 ? '<button class="btn" data-act="sit">Take a seat</button>' : ''}</section>` : ''}
+      ${r.spectators && r.spectators.length ? `<p class="label" style="text-align:center">👁 Watching: ${r.spectators.map((x) => esc(x.name)).join(', ')}</p>` : ''}
       <section class="panel code-card">
         <div class="label">Table code · share it with your friends</div>
         <div class="code">${esc(r.code)}</div>
@@ -395,7 +529,7 @@
       isHost: S.room.hostId === S.id,
       act: (action) => send({ t: 'act', action }),
       leave: () => {
-        const playing = S.room.status === 'playing';
+        const playing = S.room.status === 'playing' && !isSpectator();
         if (!playing || confirm('Leave the game? A bot will take your seat.')) send({ t: 'leave' });
       },
       rematch: () => send({ t: 'rematch' }),
@@ -403,6 +537,9 @@
       rerender: render,
       toast,
     });
+    const bar = $app.querySelector('.wz-status');
+    if (bar) bar.insertAdjacentHTML('beforeend', '<span class="ct-timer" hidden></span>');
+    updateTimer();
   }
 
   // ------------------------------------------------------------ events
@@ -427,6 +564,8 @@
     },
     create: (el) => send({ t: 'create', gameId: el.dataset.game, name: S.name || undefined, avatar: S.avatar || undefined }),
     leave: () => send({ t: 'leave' }),
+    chat: () => (S.chatOpen ? closeChat() : openChat()),
+    sit: () => send({ t: 'sit' }),
     rules: (el) => showRules(el.dataset.game),
     addBot: () => send({ t: 'addBot' }),
     fillBots: () => {

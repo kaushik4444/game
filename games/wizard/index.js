@@ -4,6 +4,7 @@
  * See games/README.md for the interface every game implements.
  */
 const engine = require('./engine');
+const { TIME_LIMIT_OPTION } = require('../common');
 
 module.exports = {
   id: 'wizard',
@@ -42,6 +43,7 @@ module.exports = {
         { value: 'short', label: 'Short (5 rounds)', desc: 'Only the first 5 rounds. Good for a quick game.' },
       ],
     },
+    TIME_LIMIT_OPTION,
   ],
   rules: [
     'The deck has 60 cards: four suits (1–13), four Wizards and four Jesters. Round 1 deals one card each, round 2 two cards, and so on.',
@@ -59,6 +61,8 @@ module.exports = {
       awaiting: () => engine.awaitingList(g),
       botAction: (playerId) => engine.botAction(g, playerId),
       // Action the server applies on its own after a pause when nobody has to act (between rounds).
+      forcedPlay: () => engine.forcedPlay(g),
+      stamp: () => g.lastTrick, // changes whenever a trick is completed
       autoAction: () => (g.phase === 'roundEnd' ? { type: 'continue' } : null),
       isOver: () => g.phase === 'gameOver',
     };
