@@ -280,3 +280,8 @@ select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .variants dd { margin: 2px 0 0; color: var(--muted); font-size: 14px; line-height: 1.4; }
 .code-inline { font-family: var(--serif); letter-spacing: .12em; color: var(--gold); }
 .sound-btn { min-width: 38px; }
+
+.tool-tile { display: flex; align-items: center; gap: 14px; color: inherit; text-decoration: none; }
+.tool-tile small { color: var(--muted); line-height: 1.35; }
+.tool-tile:hover { border-color: rgba(255, 255, 255, .3); }
+.tool-ico { font-size: 30px; }

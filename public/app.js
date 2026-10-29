@@ -467,6 +467,7 @@
         <span class="section-sub">Pick a card game and host a private table for your friends</span>
       </div>
       <section class="game-grid">${tiles}</section>
+      <a class="panel tool-tile" href="/scorecard.html"><span class="tool-ico">📝</span><span><b>Wizard scorecard</b><br><small>Playing with a real deck? Enter bids and tricks each round and the scores are worked out for you. Works offline.</small></span></a>
       <div class="roadmap-box panel">
         <span class="roadmap-icon">🧭</span>
         <div>

@@ -1,0 +1,44 @@
+/* Wizard scorecard: a scorekeeper for games played with real cards. */
+.sc { max-width: 560px; margin: 0 auto; padding: calc(env(safe-area-inset-top) + 14px) 14px calc(env(safe-area-inset-bottom) + 30px); display: grid; gap: 14px; }
+.sc-top { display: flex; align-items: center; gap: 8px; }
+.sc-top h1 { font-size: 22px; flex: 1; }
+.sc-top a { color: var(--muted); font-size: 14px; }
+.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 4px; border-radius: 999px; background: rgba(255, 255, 255, .06); }
+.tabs button { border: 0; background: transparent; border-radius: 999px; padding: 9px; font-weight: 700; color: var(--muted); }
+.tabs button.on { background: rgba(255, 255, 255, .14); color: var(--ink); }
+.sc h2 { font-size: 22px; }
+.sc .sub { color: var(--muted); font-size: 14px; margin: 2px 0 0; }
+.names { display: grid; gap: 8px; }
+.names .row { flex-wrap: nowrap; }
+.names input { flex: 1; min-width: 0; }
+.chk { display: flex; gap: 10px; align-items: flex-start; line-height: 1.35; }
+.chk input { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--gold); flex: none; }
+.stage { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 13px; text-align: center; }
+.stage span { padding: 6px; border-radius: 10px; background: rgba(255, 255, 255, .05); color: var(--muted); }
+.stage span.on { background: rgba(255, 201, 77, .2); color: var(--gold); font-weight: 700; }
+.plist { display: grid; gap: 8px; }
+.prow { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 16px; background: rgba(255, 255, 255, .06); border: 1px solid var(--panel-line); }
+.prow.dealer { border-color: rgba(255, 255, 255, .5); }
+.prow.first { border-color: var(--first); }
+.prow .who { flex: 1; min-width: 0; }
+.prow .who b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prow .who small { color: var(--muted); }
+.bdg { font: 800 9.5px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; padding: 3px 7px; border-radius: 999px; margin-left: 4px; vertical-align: 2px; }
+.bdg.d { background: #fff; color: #1a1a40; }
+.bdg.f { background: var(--first); color: #052b25; }
+.step { display: inline-flex; align-items: center; gap: 6px; }
+.step button { width: 44px; height: 44px; border-radius: 14px; border: 1px solid var(--panel-line); background: rgba(255, 255, 255, .08); font-size: 24px; font-weight: 700; line-height: 1; }
+.step button:active { background: rgba(255, 255, 255, .18); }
+.step output { min-width: 34px; text-align: center; font: 800 26px var(--serif); font-variant-numeric: tabular-nums; }
+.sumbar { padding: 10px 14px; border-radius: 14px; background: rgba(255, 255, 255, .07); text-align: center; font-weight: 600; }
+.sumbar.ok { background: rgba(80, 220, 160, .18); color: #9cf0c8; }
+.sumbar.warn { background: rgba(255, 140, 100, .2); color: #ffc2a8; }
+.sc table.score td.cell small { display: block; color: var(--muted); font-size: 11px; }
+.sc table.score tr.edit { cursor: pointer; }
+.sc table.score tr.edit:hover td { background: rgba(255, 255, 255, .05); }
+.sc table.score tfoot td { font-weight: 800; border-top: 2px solid var(--panel-line); font-size: 15px; }
+.lead { color: var(--gold); }
+.podium .pts { margin-left: auto; }
+.menu { display: flex; flex-wrap: wrap; gap: 8px; }
+.hint { color: var(--muted); font-size: 13px; text-align: center; }
+.sc .row { display: flex; gap: 10px; align-items: center; }

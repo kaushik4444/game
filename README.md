@@ -17,9 +17,13 @@ Bots can fill any open seat.
 - **Last trick auto play**: when everybody is down to one card, the first player plays and the remaining cards are played automatically (29: unless a player may still ask for the trump).
 - **New card sounds**: a swish + snap + thump for a played card, a riffle for dealing and a sweep when a trick is collected.
 
+## Wizard scorecard (offline games with a real deck)
+
+Open `/scorecard.html` (link on the home screen). Add 3 to 6 players, then for each round enter every player's bid, then the tricks each one won; scores are worked out automatically (exact = 20 + 10 per trick, otherwise −10 per trick off). It shows the dealer and who bids first, warns when the total bid equals the tricks (Plus / Minus 1 rule), has a Scores table with totals, lets you tap a round to correct it, undo the last round, and copy the scores. It saves on the device and works offline after the first visit. It does not need a table or an account.
+
 ## Roadmap (next phase)
 
-Poker, The Mind, Saboteur, and a Wizard score keeper for offline games with real cards.
+Poker, The Mind and Saboteur.
 
 ## Run
 
