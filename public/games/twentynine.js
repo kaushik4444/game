@@ -109,7 +109,7 @@
 
   function tableHTML(v, ctx) {
     const live = v.trick.length > 0;
-    const shown = live ? v.trick : v.lastTrick ? v.lastTrick.cards : [];
+    const shown = live ? v.trick : (v._hold && v.lastTrick) ? v.lastTrick.cards : [];
     const winner = !live && v.lastTrick ? v.lastTrick.winner : -1;
     const ids = new Set(shown.map((t) => t.card.id));
     const html = pt.tableHTML({

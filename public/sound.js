@@ -77,11 +77,10 @@
   }
 
   const SOUNDS = {
-    // a card flicked onto felt: quick swish, a papery snap and a soft low thump
+    // a card flicked onto felt: soft gentle brush and a low muffled thud
     card: () => {
-      swish(0, 0.11, { vol: 0.45, f0: 5200, f1: 1400, q: 0.8 });
-      swish(0.045, 0.05, { vol: 0.28, f0: 9000, f1: 5000, q: 0.6 });
-      tone(120, 0.04, 0.12, { type: 'sine', vol: 0.3, slide: 0.55 });
+      swish(0, 0.08, { vol: 0.22, f0: 2400, f1: 800, q: 0.9 });
+      tone(95, 0.02, 0.08, { type: 'sine', vol: 0.15, slide: 0.4 });
     },
     // several cards riffled out
     deal: () => { for (let i = 0; i < 5; i++) { swish(i * 0.075, 0.07, { vol: 0.28, f0: 5000, f1: 1800, q: 0.9 }); tone(130, i * 0.075 + 0.03, 0.07, { vol: 0.1, slide: 0.6 }); } },
