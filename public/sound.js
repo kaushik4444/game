@@ -77,23 +77,38 @@
   }
 
   const SOUNDS = {
-    // a card flicked onto felt: soft gentle brush and a low muffled thud
+    // refined tactile card play: crisp tactile swish with warm wood/felt thud
     card: () => {
-      swish(0, 0.08, { vol: 0.22, f0: 2400, f1: 800, q: 0.9 });
-      tone(95, 0.02, 0.08, { type: 'sine', vol: 0.15, slide: 0.4 });
+      swish(0, 0.09, { vol: 0.28, f0: 3200, f1: 1100, q: 0.8 });
+      tone(110, 0.015, 0.09, { type: 'sine', vol: 0.22, slide: 0.45 });
+      tone(65, 0.03, 0.06, { type: 'triangle', vol: 0.15 });
     },
-    // several cards riffled out
-    deal: () => { for (let i = 0; i < 5; i++) { swish(i * 0.075, 0.07, { vol: 0.28, f0: 5000, f1: 1800, q: 0.9 }); tone(130, i * 0.075 + 0.03, 0.07, { vol: 0.1, slide: 0.6 }); } },
-    // the finished trick being swept to the winner
-    collect: () => { swish(0, 0.32, { vol: 0.36, f0: 600, f1: 3400, q: 0.7 }); tone(220, 0.02, 0.18, { type: 'triangle', vol: 0.06, slide: 1.6 }); },
-    chat: () => { tone(880, 0, 0.07, { vol: 0.08 }); tone(1175, 0.06, 0.09, { vol: 0.08 }); },
-    tick: () => tone(740, 0, 0.07, { type: 'square', vol: 0.06 }),
-    turn: () => { tone(660, 0, 0.16, { vol: 0.2 }); tone(880, 0.12, 0.22, { vol: 0.2 }); },
-    win: () => { tone(523, 0, 0.14, { type: 'triangle' }); tone(659, 0.09, 0.14, { type: 'triangle' }); tone(784, 0.18, 0.24, { type: 'triangle' }); },
-    lose: () => tone(300, 0, 0.3, { type: 'triangle', vol: 0.14, slide: 0.7 }),
-    round: () => { tone(440, 0, 0.18, { type: 'triangle' }); tone(587, 0.16, 0.3, { type: 'triangle' }); },
-    fanfare: () => { [523, 659, 784, 1047].forEach((f, i) => tone(f, i * 0.14, 0.32, { type: 'triangle', vol: 0.22 })); tone(1047, 0.6, 0.7, { type: 'sine', vol: 0.18 }); },
-    emote: () => tone(900, 0, 0.12, { vol: 0.12, slide: 1.5 }),
+    // deal: smooth riffle cascade
+    deal: () => {
+      for (let i = 0; i < 5; i++) {
+        swish(i * 0.06, 0.06, { vol: 0.22, f0: 4000, f1: 1500, q: 0.9 });
+        tone(140 + i * 15, i * 0.06 + 0.02, 0.05, { type: 'sine', vol: 0.08 });
+      }
+    },
+    // collect: graceful sweep into winner's pile
+    collect: () => {
+      swish(0, 0.28, { vol: 0.32, f0: 800, f1: 2800, q: 0.75 });
+      tone(261.63, 0.02, 0.15, { type: 'triangle', vol: 0.08, slide: 1.5 });
+      tone(329.63, 0.08, 0.18, { type: 'triangle', vol: 0.08, slide: 1.4 });
+    },
+    chat: () => { tone(523.25, 0, 0.06, { type: 'sine', vol: 0.1 }); tone(659.25, 0.05, 0.08, { type: 'sine', vol: 0.1 }); },
+    tick: () => tone(587.33, 0, 0.05, { type: 'sine', vol: 0.08 }),
+    turn: () => { tone(523.25, 0, 0.12, { type: 'triangle', vol: 0.15 }); tone(659.25, 0.1, 0.18, { type: 'triangle', vol: 0.18 }); tone(783.99, 0.2, 0.25, { type: 'triangle', vol: 0.22 }); },
+    win: () => {
+      [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(f, i * 0.08, 0.25, { type: 'triangle', vol: 0.18 }));
+    },
+    lose: () => tone(220, 0, 0.25, { type: 'triangle', vol: 0.15, slide: 0.6 }),
+    round: () => { tone(392, 0, 0.15, { type: 'triangle', vol: 0.15 }); tone(523.25, 0.12, 0.25, { type: 'triangle', vol: 0.18 }); },
+    fanfare: () => {
+      [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => tone(f, i * 0.12, 0.35, { type: 'triangle', vol: 0.2 }));
+      tone(1046.5, 0.5, 0.6, { type: 'sine', vol: 0.18, slide: 1.05 });
+    },
+    emote: () => tone(783.99, 0, 0.1, { type: 'sine', vol: 0.12, slide: 1.3 }),
   };
 
   window.CardTable = window.CardTable || {};

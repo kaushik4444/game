@@ -89,11 +89,11 @@ button.card { cursor: pointer; }
 .pt-felt {
   position: absolute; inset: 8% 3%; border-radius: 50%;
   background:
-    radial-gradient(ellipse at 50% 30%, rgba(255, 255, 255, .14), transparent 55%),
-    radial-gradient(ellipse at 50% 55%, #2c3a9a 0%, #1f2670 55%, #141852 100%);
+    radial-gradient(ellipse at 50% 30%, rgba(255, 255, 255, .12), transparent 55%),
+    radial-gradient(ellipse at 50% 55%, #184e3d 0%, #103428 55%, #081d16 100%);
   border: clamp(7px, 1.4vw, 12px) solid transparent;
   background-clip: padding-box;
-  box-shadow: 0 0 0 clamp(7px, 1.4vw, 12px) rgba(124, 140, 255, .28), 0 0 0 clamp(9px, 1.7vw, 14px) rgba(10, 11, 30, .9), inset 0 0 60px rgba(0, 0, 0, .5), 0 24px 50px rgba(0, 0, 0, .55), 0 0 70px rgba(110, 90, 255, .25);
+  box-shadow: 0 0 0 clamp(7px, 1.4vw, 12px) rgba(52, 211, 153, .22), 0 0 0 clamp(9px, 1.7vw, 14px) rgba(5, 18, 13, .95), inset 0 0 70px rgba(0, 0, 0, .55), 0 24px 50px rgba(0, 0, 0, .6), 0 0 70px rgba(16, 185, 129, .2);
 }
 .pt-felt::after { content: ''; position: absolute; inset: 9%; border-radius: 50%; border: 1.5px solid rgba(255, 255, 255, .1); }
 .pt-info { position: absolute; left: 1%; bottom: 1%; z-index: 1; display: grid; gap: 2px; font-size: 12px; color: rgba(255, 255, 255, .7); pointer-events: none; }

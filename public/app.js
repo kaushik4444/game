@@ -30,6 +30,7 @@
     chatOpen: false,
     unread: 0,
     skew: 0, // server clock minus this device's clock, for the turn countdown
+    dismissedWhatsNew: store.get('ct_wn') === '1',
   };
   const plugins = {};
   let ws = null;
@@ -446,6 +447,15 @@
           <span class="feat-badge">🛡️ Fair hidden-state deals</span>
         </div>
       </header>
+      ${S.dismissedWhatsNew ? '' : `
+      <div class="whats-new panel">
+        <span class="wn-icon">🎉</span>
+        <div class="wn-content">
+          <b>What's New in Card Table Arena</b>
+          Authentic Ken Fisher Wizard cards with gorgeous runes & Z/N ranks, softer tactile card sound effects, auto-clearing tricks with winner lead prompts, and instant bot fill!
+        </div>
+        <button class="wn-close" data-act="dismissWhatsNew" aria-label="Dismiss">✕</button>
+      </div>`}
       <div class="home-grid">
         <section class="panel profile-panel">
           <div class="panel-tag">PLAYER IDENTITY</div>
@@ -616,6 +626,11 @@
     removeBot: (el) => send({ t: 'removeBot', id: el.dataset.id }),
     seats: (el) => send({ t: 'setSeats', seats: Number(el.dataset.n) }),
     start: () => send({ t: 'start' }),
+    dismissWhatsNew: () => {
+      S.dismissedWhatsNew = true;
+      store.set('ct_wn', '1');
+      render();
+    },
     copyLink: async () => {
       try {
         await navigator.clipboard.writeText(inviteUrl());
