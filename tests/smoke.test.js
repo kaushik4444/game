@@ -37,7 +37,7 @@ function client(port, name, token) {
   c.ws.on('open', () => c.send({ t: 'hello', name, token }));
   c.ws.on('message', (raw) => {
     const m = JSON.parse(raw);
-    if (m.t === 'welcome') Object.assign(c, { id: m.id, token: m.token, games: m.games });
+    if (m.t === 'welcome') { Object.assign(c, { id: m.id, token: m.token, games: m.games, tables: m.tables || [] }); }
     if (m.t === 'state') { c.room = m.room; c.view = m.view; if (c.playing) c.step(); }
     if (m.t === 'error') c.errors.push(m.message);
     if (m.t === 'chat') c.chats.push(m.m);
@@ -66,7 +66,7 @@ function client(port, name, token) {
   // --- static hosting
   const home = await get(port, '/');
   assert.equal(home.status, 200);
-  assert.match(home.body, /Card Table/);
+  assert.match(home.body, /Tableverse/);
   assert.equal(home.headers['x-content-type-options'], 'nosniff');
   assert.equal((await get(port, '/games/wizard.js')).status, 200);
   assert.equal((await get(port, '/healthz')).body, 'ok');
@@ -104,7 +104,7 @@ function client(port, name, token) {
   assert.equal(privateHost.room.visibility, 'private');
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(b.tables.some((t) => t.code === privateHost.room.code), false);
-  privateHost.close();
+  privateHost.ws.close();
   b.send({ t: 'join', code: 'ZZZZ' });
   await b.until(() => b.errors.length, 'error for bad code');
   b.send({ t: 'join', code: a.room.code.toLowerCase() });

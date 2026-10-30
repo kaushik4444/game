@@ -78,6 +78,10 @@ input[type=text]:focus-visible, .btn:focus-visible, button:focus-visible { outli
 .visibility-status { display: inline-flex; align-items: center; min-height: 30px; padding: 4px 10px; border: 1px solid var(--panel-line); border-radius: 999px; font-size: 13px; font-weight: 700; }
 .visibility-status.private { color: var(--muted); }
 .visibility-status.public { color: var(--good); border-color: rgba(52, 211, 153, .4); background: rgba(52, 211, 153, .1); }
+.spectator-list { margin: 8px 0; border: 1px solid var(--panel-line); border-radius: 12px; background: rgba(255,255,255,.03); }
+.spectator-list summary { padding: 10px 14px; cursor: pointer; color: var(--ink); font-weight: 700; }
+.spectator-list summary:hover { color: var(--gold); }
+.spectator-names { padding: 0 14px 10px; color: var(--muted); font-size: 13px; }
 .activity-sheet { width: min(560px, calc(100vw - 28px)); max-height: min(75vh, 680px); overflow: auto; }
 .activity-list { list-style: none; padding: 0; margin: 14px 0 0; text-align: left; }
 .activity-list li { display: flex; gap: 8px; align-items: baseline; padding: 9px 0; border-bottom: 1px solid var(--panel-line); font-size: 14px; }

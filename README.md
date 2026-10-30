@@ -1,4 +1,6 @@
-# Card Table
+# Tableverse
+
+> **Your friends. Your games. One table.**
 
 Browser-based multiplayer card and board games. Phone or desktop, no install.
 
@@ -8,6 +10,26 @@ Browser-based multiplayer card and board games. Phone or desktop, no install.
 - **The Mind**: 2–4 players, cooperative and real-time. No turns, no hints: play your numbers (1–100) in ascending order by feel. Lives, throwing stars, standard / easy / hard.
 
 Bots can fill any open seat.
+
+## Database & Architecture (PostgreSQL / Neon)
+
+Tableverse uses PostgreSQL (Neon, Supabase, or self-hosted) for persistent player accounts, sessions, and match history:
+
+- **Environment Configuration**: Set `DATABASE_URL` in your environment (e.g. `postgresql://user:pass@ep-xyz.neon.tech/neondb?sslmode=require`).
+- **Zero-config Fallback**: If `DATABASE_URL` is omitted, Tableverse automatically runs with an in-memory repository for local development and offline test execution.
+- **Migrations**: Automated version-controlled SQL migrations located in `db/migrations/`. Run manually via:
+  ```bash
+  npm run migrate
+  ```
+  Or automatically applied when the server boots.
+- **Anonymous Player Accounts**: Guests are automatically provisioned with permanent internal UUIDs and bearer tokens hashed with SHA-256 before storage.
+- **Completed Match Archive**: Every completed game is saved to the `matches` and `match_participants` tables with player scores and winner tracking.
+- **Render Deployment**:
+  1. Create a Web Service connected to your repository.
+  2. Set `DATABASE_URL` in the Render Environment Variables tab pointing to your Neon database.
+  3. Build Command: `npm install`
+  4. Start Command: `npm start`
+
 
 ## What's new in v0.2
 
@@ -23,7 +45,7 @@ Bots can fill any open seat.
 - **Sessions in progress**: the home screen lists active public tables. Join a lobby with an open seat, see `Full` when all seats are occupied, or spectate it once play has begun. Empty/disconnected tables expire automatically: rooms with no connected human players are removed after 10 minutes; otherwise inactive lobbies expire after 15 minutes and inactive games after 60 minutes.
 - **Private or public tables**: tables start Private by default. The host can switch a lobby between Private (invite code/link only) and Public (listed in Sessions in Progress) after inviting friends. Private tables never appear in the directory.
 
-> Tables are discoverable to everyone currently using Card Table. Do not put private information in table codes, player names, chat, or game logs.
+> Tables are discoverable to everyone currently using Tableverse. Do not put private information in table codes, player names, chat, or game logs.
 
 ## Multiplayer lifecycle
 

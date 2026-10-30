@@ -1,13 +1,18 @@
 {
-  "name": "card-table",
-  "version": "0.2.0",
-  "description": "Browser-based multiplayer board and card games (starting with Wizard)",
+  "name": "tableverse",
+  "version": "0.3.0",
+  "description": "Tableverse — Your friends. Your games. One table.",
   "main": "server.js",
   "scripts": {
+    "build": "node --check server.js && node --check public/app.js && node --check db/pool.js && node --check db/players.js && node --check db/matches.js && node --check db/migrate.js",
     "start": "node server.js",
-    "test": "node tests/engine.test.js && node tests/twentynine.test.js && node tests/poker.test.js && node tests/themind.test.js && node tests/smoke.test.js"
+    "migrate": "node db/migrate.js",
+    "test": "node tests/engine.test.js && node tests/twentynine.test.js && node tests/poker.test.js && node tests/themind.test.js && node tests/db.test.js && node tests/smoke.test.js"
   },
   "dependencies": {
+    "@neon/config": "^1.9.6",
+    "@neon/env": "^1.6.6",
+    "pg": "^8.13.1",
     "ws": "^8.18.0"
   },
   "engines": {
