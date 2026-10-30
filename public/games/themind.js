@@ -44,7 +44,10 @@
     const status = v.phase === 'ready' || v.phase === 'levelEnd' ? (p.ready ? 'ready ✓' : 'not ready') : p.voted ? '⭐ agrees' : p.cards ? `${p.cards} card${p.cards === 1 ? '' : 's'}` : 'done ✓';
     const myDiscards = v.discarded.filter((d) => d.player === i);
     const under = myDiscards.length ? `<div class="tm-seat-disc">${myDiscards.map((d) => `<span class="tm-prev ${d.why === 'mistake' ? 'bad' : 'star'}">${d.card}</span>`).join('')}</div>` : '';
-    const extra = `<div class="tm-backs">${backs}${more}</div>`;
+    let lastPlayed = null;
+    for (let k = v.pile.length - 1; k >= 0; k--) if (v.pile[k].player === i) { lastPlayed = v.pile[k]; break; }
+    const lastHTML = lastPlayed ? `<div class="tm-last" title="${esc(p.name)} last played ${lastPlayed.card}"><span class="tm-prev ${tone(lastPlayed.card)}">${lastPlayed.card}</span><small>last played</small></div>` : '';
+    const extra = `<div class="tm-backs">${backs}${more}</div>${lastHTML}`;
     return pt.seatHTML({ pid: p.id, name: p.name, avatar: pt.avatarOf(ctx.room, p.id), sub: status, turn: false, me: i === v.me, extra, under });
   }
 

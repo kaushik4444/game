@@ -59,12 +59,20 @@ module.exports = {
 
   create(players, options, rng) {
     const g = engine.createGame(players, options, rng);
+    const jit = {};
     return {
+      // bots think for a moment so everybody can follow the action
+      botDelayMs: (id) => {
+        const key = id + ':' + g.handNo + ':' + g.board.length + ':' + g.log.length;
+        if (!(key in jit)) { for (const k in jit) delete jit[k]; jit[key] = 1400 + rng() * 1600; }
+        return jit[key];
+      },
+      autoDelayMs: () => (g.phase === 'runout' ? 2400 : null),
       view: (playerId) => engine.viewFor(g, playerId),
       act: (playerId, action) => engine.applyAction(g, playerId, action),
       awaiting: () => engine.awaiting(g),
       botAction: (playerId) => engine.botAction(g, playerId),
-      autoAction: () => (g.phase === 'handEnd' ? { type: 'continue' } : null),
+      autoAction: () => (g.phase === 'handEnd' ? { type: 'continue' } : g.phase === 'runout' ? { type: 'deal' } : null),
       isOver: () => g.phase === 'gameOver',
     };
   },

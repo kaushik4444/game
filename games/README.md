@@ -44,3 +44,9 @@ Then:
    and add a `<script>` tag in `public/index.html`. `ctx` has `act(action)`, `leave()`, `rematch()`, `rerender()`,
    `showRules()`, `isHost`, `room`, `game`, `toast()`. `public/table.css` has shared card and table styles.
 3. Keep the rules in a pure `engine.js` (no sockets, no timers) and unit-test it like `tests/engine.test.js`.
+
+## Optional pacing hooks
+
+- `botDelayMs(playerId)`: how long (ms) that bot waits before acting. Poker and The Mind use it so people can follow.
+- `autoDelayMs()`: delay before `autoAction()` fires (e.g. Poker deals an all-in runout street by street).
+- `stamp()`: changes when a trick ends, so the server pauses for the collect animation.

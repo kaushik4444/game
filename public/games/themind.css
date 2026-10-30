@@ -74,3 +74,7 @@
   .tm-pile { min-height: 160px; }
   .tm-players .plate { max-width: 78px; }
 }
+
+.tm-last { display: flex; align-items: center; gap: 5px; margin-top: 4px; justify-content: center; }
+.tm-last small { font-size: 10px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+.tm-last .tm-prev { opacity: 1; box-shadow: 0 0 0 2px rgba(255,255,255,.25); }

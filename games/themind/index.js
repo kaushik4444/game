@@ -25,6 +25,17 @@ module.exports = {
       ],
     },
     {
+      key: 'pace',
+      type: 'select',
+      label: 'Bot pace',
+      default: 'relaxed',
+      choices: [
+        { value: 'relaxed', label: 'Relaxed', desc: 'Bots take their time so you can follow who plays what.' },
+        { value: 'normal', label: 'Normal', desc: 'A steady rhythm.' },
+        { value: 'fast', label: 'Fast', desc: 'Bots play quickly.' },
+      ],
+    },
+    {
       key: 'shurikens',
       type: 'boolean',
       label: 'Throwing stars',
@@ -43,25 +54,26 @@ module.exports = {
 
   create(players, options, rng) {
     const g = engine.createGame(players, options, rng);
+    const k = { relaxed: 1.6, normal: 1, fast: 0.7 }[options && options.pace] || 1.6; // pace multiplier
     const rate = {}; // each bot has its own sense of rhythm, in ms per number of gap
     const jit = {}; // cached timing so botDelayMs is stable between re-plans of the same situation
     const r = () => rng();
-    players.forEach((p) => { rate[p.id] = 300 + r() * 180; });
+    players.forEach((p) => { rate[p.id] = (300 + r() * 180) * k; });
     const delayFor = (id) => {
       const idx = g.players.findIndex((p) => p.id === id);
       if (idx < 0) return 1000;
       const c = jit[id];
       if (c && c.v === g.version) return c.d;
       let d;
-      if (g.phase === 'ready' || g.phase === 'levelEnd') d = 700 + r() * 900;
-      else if (g.starPaused) d = 700 + r() * 1200;
-      else if (g.votes.size && g.stars > 0 && !g.votes.has(idx)) d = 600 + r() * 900;
+      if (g.phase === 'ready' || g.phase === 'levelEnd') d = (700 + r() * 900) * k;
+      else if (g.starPaused) d = (700 + r() * 1200) * k;
+      else if (g.votes.size && g.stars > 0 && !g.votes.has(idx)) d = (600 + r() * 900) * k;
       else {
         const hand = g.hands[idx];
         const gap = hand.length ? Math.max(0, hand[0] - engine.tableTop(g)) : 0;
         let t = gap * rate[id] * (0.86 + r() * 0.28); // slightly early or late
         if (r() < 0.04) t *= 1.3; // occasional hesitation
-        d = Math.min(25000, Math.max(900 + gap * 25, t));
+        d = Math.min(25000, Math.max((900 + gap * 25) * k, t));
         d += r() * 250;
       }
       jit[id] = { v: g.version, d };

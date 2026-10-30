@@ -37,6 +37,7 @@
     const name = (i) => esc(v.players[i].name);
     if (v.phase === 'gameOver') return 'Game over';
     if (v.phase === 'handEnd') return `Hand ${v.handNo} complete`;
+    if (v.phase === 'runout') return 'All-in: dealing the rest of the board…';
     if (v.me < 0) return v.turn >= 0 ? `${name(v.turn)} to act…` : 'Watching';
     const me = v.players[v.me];
     if (!me.inHand) return v.turn >= 0 ? `You are out. ${name(v.turn)} to act…` : 'You are out';
@@ -72,11 +73,11 @@
   function centerHTML(v, z) {
     const slots = [];
     for (let k = 0; k < 5; k++) slots.push(v.board[k] ? cardHTML(v.board[k], k >= (ui.snap ? ui.snap.board : 0) ? 'deal' : '') : '<div class="pkc slot"></div>');
-    const win = v.result && v.phase !== 'betting' && v.result.showdown ? new Set(v.result.winners.flatMap((w) => w.best || [])) : null;
+    const win = v.result && (v.phase === 'handEnd' || v.phase === 'gameOver') && v.result.showdown ? new Set(v.result.winners.flatMap((w) => w.best || [])) : null;
     const board = v.board.map((c) => cardHTML(c, win && win.has(c.id) ? 'hl' : win ? 'dimc' : ''));
     const cards = slots.map((s, k) => (k < v.board.length ? board[k] : s));
     const street = { preflop: 'Pre-flop', flop: 'Flop', turn: 'Turn', river: 'River' }[v.street] || '';
-    return `<div class="pk-center" style="--bw:${z.board}px"><div class="pk-pot"><i class="chip"></i><b>${fmt(v.pot)}</b><span>${v.phase === 'betting' ? street : ''}</span></div><div class="pk-board">${cards.join('')}</div></div>`;
+    return `<div class="pk-center" style="--bw:${z.board}px"><div class="pk-pot"><i class="chip"></i><b>${fmt(v.pot)}</b><span>${v.phase === 'betting' ? street : v.phase === 'runout' ? 'All-in · ' + street : ''}</span></div><div class="pk-board">${cards.join('')}</div></div>`;
   }
 
   function tableHTML(v, ctx, z) {

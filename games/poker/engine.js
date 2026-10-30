@@ -252,6 +252,14 @@ function settle(g, from) {
     g.currentBet = 0;
     g.minRaise = blindsOf(g)[1];
     if (g.street === 'river') return endHand(g, true);
+    if (live(g).filter((p) => !p.allIn).length < 2) {
+      // nobody can bet any more: turn the cards over and deal the rest one street at a time ('deal' actions)
+      for (const p of live(g)) p.shown = true;
+      g.phase = 'runout';
+      g.turn = -1;
+      g.log.push({ by: 'Table', card: 'all-in: cards are turned over and the board is dealt', kind: 'info' });
+      return;
+    }
     g.deck.pop(); // burn
     if (g.street === 'preflop') {
       g.board.push(g.deck.pop(), g.deck.pop(), g.deck.pop());
@@ -285,11 +293,6 @@ function endHand(g, showdown) {
   const pots = [];
   let evals = null;
   if (showdown && alive.length > 1) {
-    // run the board out if players were all-in before the river
-    while (g.board.length < 5) {
-      if (g.board.length === 0) g.board.push(g.deck.pop(), g.deck.pop(), g.deck.pop());
-      else g.board.push(g.deck.pop());
-    }
     evals = new Map(alive.map((p) => [p, best(p.hole.concat(g.board))]));
   }
   const levels = [...new Set(g.players.filter((p) => p.total > 0).map((p) => p.total))].sort((a, b) => a - b);
@@ -381,6 +384,17 @@ function applyAction(g, playerId, action) {
     if (g.phase !== 'handEnd') return fail('Nothing to continue');
     if (playerId !== null && !g.players.some((p) => p.id === playerId)) return fail('You are not seated at this table');
     startHand(g);
+    return ok;
+  }
+  if (action.type === 'deal') {
+    if (g.phase !== 'runout') return fail('Nothing to deal');
+    if (playerId !== null && !g.players.some((q) => q.id === playerId)) return fail('You are not seated at this table');
+    g.deck.pop(); // burn
+    if (g.board.length === 0) { g.board.push(g.deck.pop(), g.deck.pop(), g.deck.pop()); g.street = 'flop'; }
+    else if (g.board.length === 3) { g.board.push(g.deck.pop()); g.street = 'turn'; }
+    else { g.board.push(g.deck.pop()); g.street = 'river'; }
+    g.log.push({ by: 'Table', card: `${g.street} dealt`, kind: 'info' });
+    if (g.street === 'river') endHand(g, true);
     return ok;
   }
   if (g.phase !== 'betting') return fail('Not your turn');

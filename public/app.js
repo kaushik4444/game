@@ -145,18 +145,20 @@
   }
 
   function tableJoinModeOptions(t) {
-    if (!t) return ['join'];
+    if (!t) return ['join', 'spectate'];
     if (t.status === 'playing') return ['spectate'];
     return ['join', 'spectate'];
   }
 
-  function askJoinMode(code, t) {
+  function openJoinModeDialog(code, t) {
     const modes = tableJoinModeOptions(t);
     if (modes.length === 1) return joinTable(code, modes[0]);
     const overlay = document.createElement('div');
     overlay.className = 'overlay';
-    const label = t && t.status === 'playing' ? 'This table is in progress.' : 'Choose how to enter this table.';
-    overlay.innerHTML = `<div class="sheet" data-stop="1" role="dialog" aria-label="Join or spectate"><h2>Join table ${esc(code)}</h2><p class="hint">${esc(label)}</p><div class="row" style="margin-top:12px; gap:10px; flex-wrap:wrap"><button class="btn" data-join-mode="join">Join as player</button><button class="btn ghost" data-join-mode="spectate">Spectate</button></div><div class="row" style="margin-top:10px"><button class="btn ghost small" data-join-close="1">Cancel</button></div></div>`;
+    const label = t
+      ? (t.status === 'playing' ? 'This table is in progress.' : 'This table is waiting in the lobby.')
+      : 'Choose how to enter this table.';
+    overlay.innerHTML = `<div class="sheet" data-stop="1" role="dialog" aria-label="Join or spectate"><h2>Join table ${esc(code)}</h2><p class="hint">${esc(label)}</p><div class="row" style="margin-top:12px; gap:10px; flex-wrap:wrap">${modes.includes('join') ? '<button class="btn" data-join-mode="join">Join as player</button>' : ''}${modes.includes('spectate') ? '<button class="btn ghost" data-join-mode="spectate">Spectate</button>' : ''}</div><div class="row" style="margin-top:10px"><button class="btn ghost small" data-join-close="1">Cancel</button></div></div>`;
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay || e.target.closest('[data-join-close]')) {
         overlay.remove();
@@ -168,6 +170,10 @@
       joinTable(code, pick.dataset.joinMode);
     });
     document.body.appendChild(overlay);
+  }
+
+  function askJoinMode(code, t) {
+    openJoinModeDialog(code, t);
   }
 
   function publicTableAction(t) {
@@ -480,9 +486,6 @@
 
   function renderInvite() {
     const t = tableByCode(S.invite);
-    const modes = tableJoinModeOptions(t);
-    const canJoin = modes.includes('join');
-    const canSpectate = modes.includes('spectate');
     const context = t
       ? (t.status === 'playing' ? 'This game is already in progress.' : 'This table is waiting in the lobby.')
       : 'Pick how you want to enter this table.';
@@ -496,8 +499,7 @@
       <section class="panel">${profileHTML()}</section>
       <section class="panel"><p class="hint" style="text-align:left">${esc(context)}</p>
         <div class="row" style="margin-top:10px; gap:10px; flex-wrap:wrap">
-          ${canJoin ? `<button class="btn big" data-act="joinInviteJoin">Join as player</button>` : ''}
-          ${canSpectate ? `<button class="btn ghost big" data-act="joinInviteSpectate">Spectate</button>` : ''}
+          <button class="btn big" data-act="joinInvite">Choose join mode</button>
         </div>
       </section>
       <button class="btn ghost" data-act="cancelInvite">Not now</button>
@@ -724,15 +726,10 @@
     emotes: () => toggleEmoteBar(),
     activityLog: () => openActivityLog(),
     sound: () => { CardTable.sound.toggle(); render(); },
-    joinInviteJoin: () => {
+    joinInvite: () => {
       if (!S.named || !S.name) return toast('Please type your name first');
       store.set('ct_name', S.name);
-      joinTable(S.invite, 'join');
-    },
-    joinInviteSpectate: () => {
-      if (!S.named || !S.name) return toast('Please type your name first');
-      store.set('ct_name', S.name);
-      joinTable(S.invite, 'spectate');
+      openJoinModeDialog(S.invite, tableByCode(S.invite));
     },
     cancelInvite: () => {
       S.invite = '';
