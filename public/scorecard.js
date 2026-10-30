@@ -48,7 +48,7 @@
       .join('');
     const max = defaultRounds(cnt);
     return `<main class="sc">
-      <div class="sc-top"><h1>Wizard scorecard</h1><a href="/">Card Table</a></div>
+      <div class="sc-top"><h1>Wizard scorecard</h1><a href="/">Tableverse</a></div>
       <p class="sub">Keep score for a game of Wizard played with a real deck. Works offline, and your game is saved on this device.</p>
       <section class="panel names"><div class="label">Players (3 to 6, in seating order)</div>${rows}
         ${cnt < 6 ? '<button class="btn ghost small" data-act="add" style="justify-self:start">+ Add player</button>' : ''}</section>
@@ -121,7 +121,7 @@
   function gameHTML() {
     const body = G.tab === 'scores' ? scoresHTML() : over() ? finishHTML() : playHTML();
     return `<main class="sc">
-      <div class="sc-top"><h1>Wizard scorecard</h1><a href="/">Card Table</a></div>
+      <div class="sc-top"><h1>Wizard scorecard</h1><a href="/">Tableverse</a></div>
       <div class="tabs" role="tablist"><button class="${G.tab === 'scores' ? '' : 'on'}" data-act="tab" data-t="play">Round</button><button class="${G.tab === 'scores' ? 'on' : ''}" data-act="tab" data-t="scores">Scores</button></div>
       ${body}
       <div class="menu"><button class="btn ghost small" data-act="undo" ${G.done.length ? '' : 'disabled'}>Undo last round</button><button class="btn ghost small" data-act="copy" ${G.done.length ? '' : 'disabled'}>Copy scores</button><button class="btn ghost small" data-act="new">New game</button></div>

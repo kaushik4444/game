@@ -105,7 +105,7 @@
     ws.onclose = (e) => {
       S.ready = false;
       if (e.code === 4000) {
-        $banner.textContent = 'Card Table is open in another tab. Reload to play here.';
+        $banner.textContent = 'Tableverse is open in another tab. Reload to play here.';
         $banner.hidden = false;
         return;
       }
@@ -141,7 +141,11 @@
   }
 
   function publicTableAction(t) {
-    if (t.status === 'playing') return { label: 'Spectate', disabled: false, cls: 'ghost' };
+    if (t.status === 'playing') {
+      // For in-progress games, show both options if seats available
+      if (t.members < t.seats) return { label: 'Join / Spectate', disabled: false, cls: '' };
+      return { label: 'Spectate', disabled: false, cls: 'ghost' };
+    }
     if (t.members >= t.seats) return { label: 'Full', disabled: true, cls: 'ghost' };
     return { label: 'Join', disabled: false, cls: '' };
   }
@@ -215,7 +219,7 @@
         const mine = !!(m.view && m.view.myTurn);
         if (mine && !wasMyTurn) {
           try { navigator.vibrate && navigator.vibrate(70); } catch { /* ignore */ }
-          if (document.hidden) document.title = '● Your turn · Card Table';
+          if (document.hidden) document.title = '● Your turn · Tableverse';
         }
         wasMyTurn = mine;
         render();
@@ -240,7 +244,7 @@
     }
   }
 
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) document.title = 'Card Table'; });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) document.title = 'Tableverse'; });
 
   // ------------------------------------------------------------ rendering
   const avatarColor = (s) => {
@@ -429,7 +433,7 @@
     const ae = document.activeElement;
     const keep = ae && ae.id === 'name' ? { start: ae.selectionStart, end: ae.selectionEnd } : null;
     if (!S.ready && !S.room) {
-      $app.innerHTML = '<div class="page"><div class="brand"><div class="mark">🂡</div><h1>Card Table</h1><p>Connecting…</p></div></div>';
+      $app.innerHTML = '<div class="page"><div class="brand"><div class="mark">🂡</div><h1>Tableverse</h1><p>Connecting…</p></div></div>';
     } else if (!S.room && S.invite) renderInvite();
     else if (!S.room) renderHome();
     else if (S.room.status === 'lobby') renderLobby();
@@ -451,7 +455,7 @@
       <header class="brand"><span class="brand-snd">${CardTable.sound.button()}</span>
         <div class="mark">🂡</div>
         <h1>You’re invited!</h1>
-        <p>Join table <b class="code-inline">${esc(S.invite)}</b> on Card Table. Pick a name and an avatar so your friends know who you are.</p>
+        <p>Join table <b class="code-inline">${esc(S.invite)}</b> on Tableverse. Pick a name and an avatar so your friends know who you are.</p>
       </header>
       <section class="panel">${profileHTML()}</section>
       <button class="btn big" data-act="joinInvite">Join table ${esc(S.invite)}</button>
@@ -490,8 +494,8 @@
         <span class="brand-snd">${CardTable.sound.button()}</span>
         <div class="arena-tag">⚔️ MULTIPLAYER ARENA</div>
         <div class="mark">🂡</div>
-        <h1>Card Table</h1>
-        <p class="brand-desc">Real-time card and board games with friends. Instant rooms, smart bots, authentic gameplay — right in your browser.</p>
+        <h1>Tableverse</h1>
+        <p class="brand-desc">Your friends. Your games. One table. Real-time multiplayer with instant rooms, smart bots, authentic gameplay — right in your browser.</p>
         <div class="arena-features">
           <span class="feat-badge">✨ No app install required</span>
           <span class="feat-badge">📱 Mobile & desktop ready</span>
@@ -502,8 +506,8 @@
       <div class="whats-new panel">
         <span class="wn-icon">🎉</span>
         <div class="wn-content">
-          <b>What's New in Card Table Arena</b>
-          Authentic Ken Fisher Wizard cards with gorgeous runes & Z/N ranks, softer tactile card sound effects, auto-clearing tricks with winner lead prompts, instant bot fill, and fully polished multiplayer Poker and The Mind games!
+          <b>What's New in Tableverse Arena</b>
+          Public &amp; private tables with live session discovery, real-time play-by-play game activity log, stronger 6-character room codes, recent tables with live status, and upcoming roadmap games (Saboteur, 6 nimmt!, UNO)!
         </div>
         <button class="wn-close" data-act="dismissWhatsNew" aria-label="Dismiss">✕</button>
       </div>`}
@@ -595,7 +599,7 @@
         <span class="row" style="gap:6px">${CardTable.chat.button()}<button class="btn ghost small" data-act="rules" data-game="${esc(r.gameId)}">Rules</button></span>
       </div>
       ${spectating ? `<section class="panel"><h3>👁 You are watching</h3><p class="hint" style="text-align:left;margin:6px 0 10px">The next game starts when the host presses Start. ${open > 0 ? 'There is an open seat if you want to play.' : 'Ask the host to free a seat if you want to play.'}</p>${open > 0 ? '<button class="btn" data-act="sit">Take a seat</button>' : ''}</section>` : ''}
-      ${r.spectators && r.spectators.length ? `<p class="label" style="text-align:center">👁 Watching: ${r.spectators.map((x) => esc(x.name)).join(', ')}</p>` : ''}
+      ${r.spectators && r.spectators.length ? `<details class="spectator-list"><summary>👁 ${r.spectators.length} watching</summary><div class="spectator-names">${r.spectators.map((x) => esc(x.name)).join(', ')}</div></details>` : ''}
       <section class="panel code-card">
         <div class="label">Table code · share it with your friends</div>
         <div class="code">${esc(r.code)}</div>
@@ -726,11 +730,11 @@
     },
     whatsapp: () => {
       const g = gameMeta(S.room.gameId);
-      const text = `Join my ${g ? g.name : 'card'} table on Card Table: ${inviteUrl()} (code ${S.room.code})`;
+      const text = `Join my ${g ? g.name : 'card'} table on Tableverse: ${inviteUrl()} (code ${S.room.code})`;
       window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
     },
     share: () => {
-      navigator.share({ title: 'Card Table', text: `Join my table (code ${S.room.code})`, url: inviteUrl() }).catch(() => {});
+      navigator.share({ title: 'Tableverse', text: `Join my table (code ${S.room.code})`, url: inviteUrl() }).catch(() => {});
     },
   };
 

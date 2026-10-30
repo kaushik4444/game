@@ -5,6 +5,10 @@ const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const games = require('./games');
+const dbPool = require('./db/pool');
+const { migrate } = require('./db/migrate');
+const dbPlayers = require('./db/players');
+const dbMatches = require('./db/matches');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = {
@@ -200,7 +204,31 @@ function start(opts = {}) {
   function afterChange(room) {
     const g = room.game;
     if (g) {
-      if (g.isOver()) room.status = 'finished';
+      if (g.isOver() && room.status !== 'finished') {
+        room.status = 'finished';
+        // Persist completed match asynchronously
+        try {
+          const scores = g.scores ? g.scores() : [];
+          const maxScore = scores.length ? Math.max(...scores) : 0;
+          const participants = room.members.map((m, idx) => ({
+            playerId: m.id,
+            name: m.name,
+            seat: idx,
+            score: scores[idx] ?? 0,
+            isWinner: (scores[idx] ?? 0) === maxScore,
+            isBot: Boolean(m.bot),
+          }));
+          dbMatches.recordMatch({
+            roomCode: room.code,
+            gameId: room.gameId,
+            seats: room.seats,
+            options: room.options,
+            participants,
+          }).catch((err) => console.error('[server] Failed to record match:', err.message));
+        } catch (e) {
+          console.error('[server] Error preparing match record:', e.message);
+        }
+      }
       // a trick just finished: give everyone a moment to see it being collected before the next card
       const lt = g.stamp ? g.stamp() : null;
       if (lt && lt !== room.lastStamp && trickPauseMs > 0) room.pauseUntil = Date.now() + trickPauseMs;
@@ -343,6 +371,7 @@ function start(opts = {}) {
   const handlers = {
     setName(p, msg) {
       applyProfile(p, msg);
+      dbPlayers.updateProfile(p.id, { displayName: p.name, avatar: p.avatar }).catch(() => {});
       const room = rooms.get(p.room);
       if (!room) return;
       const m = room.members.find((x) => x.id === p.id);
@@ -579,14 +608,42 @@ function start(opts = {}) {
   // ------------------------------------------------------------ websocket
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 8 * 1024 });
 
-  function onHello(ws, msg) {
+  async function onHello(ws, msg) {
     let p = typeof msg.token === 'string' ? tokens.get(msg.token) : null;
+    let bearerToken = msg.token;
+
+    if (!p && typeof msg.token === 'string') {
+      // Check database / persistent store
+      const dbPlayer = await dbPlayers.authenticateToken(msg.token);
+      if (dbPlayer) {
+        p = {
+          id: dbPlayer.id,
+          token: msg.token,
+          name: dbPlayer.display_name,
+          avatar: dbPlayer.avatar,
+          room: null,
+          ws: null,
+          connected: false,
+          lastSeen: Date.now(),
+        };
+        players.set(p.id, p);
+        tokens.set(p.token, p);
+      }
+    }
+
     if (!p) {
+      // Create new anonymous player account
+      const created = await dbPlayers.createAnonymousPlayer({
+        displayName: cleanName(msg.name) || 'Guest ' + (100 + crypto.randomInt(900)),
+        avatar: AVATARS.includes(msg.avatar) ? msg.avatar : pick(AVATARS),
+      });
+
+      bearerToken = created.rawToken;
       p = {
-        id: 'p_' + crypto.randomBytes(6).toString('hex'),
-        token: crypto.randomBytes(16).toString('hex'),
-        name: 'Guest ' + (100 + crypto.randomInt(900)),
-        avatar: pick(AVATARS),
+        id: created.player.id,
+        token: bearerToken,
+        name: created.player.display_name,
+        avatar: created.player.avatar,
         room: null,
         ws: null,
         connected: false,
@@ -711,11 +768,16 @@ function start(opts = {}) {
     return new Promise((resolve) => wss.close(() => server.close(() => resolve())));
   }
 
+  // Run pending database migrations automatically if DATABASE_URL is configured
+  if (dbPool.hasDatabase()) {
+    migrate().catch((err) => console.error('[server] Startup migration warning:', err.message));
+  }
+
   return new Promise((resolve) => server.listen(port, () => resolve({ server, port: server.address().port, close })));
 }
 
 module.exports = { start };
 
 if (require.main === module) {
-  start().then(({ port }) => console.log(`Card Table running on http://localhost:${port}`));
+  start().then(({ port }) => console.log(`Tableverse running on http://localhost:${port}`));
 }

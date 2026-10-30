@@ -140,6 +140,7 @@ function endRound(g) {
     return { bid: p.bid, tricks: p.tricks, delta, score: p.score };
   });
   g.history.push({ round: g.round, dealer: g.dealer, trumpSuit: g.trumpSuit, rows });
+  g.log.push({ by: 'System', card: `Round ${g.round} complete`, kind: 'roundEnd' });
   g.phase = g.round >= g.totalRounds ? 'gameOver' : 'roundEnd';
 }
 
@@ -158,6 +159,7 @@ function applyAction(g, playerId, action) {
       if (idx !== g.dealer) return fail('Only the dealer chooses trump');
       if (!SUITS.includes(action.suit)) return fail('Invalid suit');
       g.trumpSuit = action.suit;
+      g.log.push({ by: g.players[idx].name, card: `chose ${action.suit} as trump`, kind: 'trump' });
       g.phase = 'bidding';
       g.turn = (g.dealer + 1) % g.n;
       return ok();
@@ -189,10 +191,11 @@ function applyAction(g, playerId, action) {
       if (!legalCards(p.hand, g.trick).includes(p.hand[ci])) return fail('You must follow suit');
       const [card] = p.hand.splice(ci, 1);
       g.trick.push({ player: idx, card });
-      g.log.push({ by: g.players[idx].name, card: cardName(card), kind: 'play' });
+      g.log.push({ by: g.players[idx].name, card: `${cardName(card)} (trick ${g.trick.length}/${g.n})`, kind: 'play' });
       if (g.trick.length === g.n) {
         const winner = trickWinner(g.trick, g.trumpSuit);
         g.players[winner].tricks++;
+        g.log.push({ by: 'System', card: `${g.players[winner].name} wins the trick`, kind: 'trickEnd' });
         g.lastTrick = { cards: g.trick, winner };
         g.trick = [];
         g.turn = winner;

@@ -263,13 +263,9 @@
         if (v.autoPlay) return toast('Your last card is played automatically');
         if (!v.myTurn) return toast('Not your turn yet');
         if (!v.legal.includes(card.id)) return toast('You must follow the lead suit if you can');
-        if (ui.selected === card.id) {
-          ui.selected = null;
-          ctx.act({ type: 'play', cardId: card.id });
-        } else {
-          ui.selected = card.id;
-          ctx.rerender();
-        }
+        // Single tap: select & play immediately if it's your turn
+        ui.selected = card.id;
+        ctx.act({ type: 'play', cardId: card.id });
         break;
       }
       case 'play':

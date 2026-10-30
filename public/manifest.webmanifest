@@ -1,7 +1,7 @@
 {
-  "name": "Card Table",
-  "short_name": "Card Table",
-  "description": "Multiplayer card and board games in your browser",
+  "name": "Tableverse",
+  "short_name": "Tableverse",
+  "description": "Your friends. Your games. One table. Multiplayer card and board games in your browser.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0d3b2c",
