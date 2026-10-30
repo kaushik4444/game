@@ -159,7 +159,8 @@ function applyAction(g, playerId, action) {
       if (idx !== g.dealer) return fail('Only the dealer chooses trump');
       if (!SUITS.includes(action.suit)) return fail('Invalid suit');
       g.trumpSuit = action.suit;
-      g.log.push({ by: g.players[idx].name, card: `chose ${action.suit} as trump`, kind: 'trump' });
+      const suitName = { R: 'Red', Y: 'Yellow', G: 'Green', B: 'Blue' }[action.suit] || action.suit;
+      g.log.push({ by: 'System', card: `${g.players[idx].name} chooses ${suitName} as trump`, kind: 'trump' });
       g.phase = 'bidding';
       g.turn = (g.dealer + 1) % g.n;
       return ok();
@@ -174,7 +175,7 @@ function applyAction(g, playerId, action) {
       if (!Number.isInteger(amt) || amt < 0 || amt > g.round) return fail('Invalid bid');
       if (!simul && amt === forbiddenBid(g)) return fail(`The dealer cannot bid ${amt}`);
       g.players[idx].bid = amt;
-      g.log.push({ by: g.players[idx].name, card: `bids ${amt}`, kind: 'bid' });
+      g.log.push({ by: 'System', card: `${g.players[idx].name} bids ${amt}`, kind: 'bid' });
       if (g.players.every((p) => p.bid !== null)) {
         g.phase = 'playing';
         g.turn = (g.dealer + 1) % g.n;
@@ -191,11 +192,12 @@ function applyAction(g, playerId, action) {
       if (!legalCards(p.hand, g.trick).includes(p.hand[ci])) return fail('You must follow suit');
       const [card] = p.hand.splice(ci, 1);
       g.trick.push({ player: idx, card });
-      g.log.push({ by: g.players[idx].name, card: `${cardName(card)} (trick ${g.trick.length}/${g.n})`, kind: 'play' });
+      g.log.push({ by: 'System', card: `${g.players[idx].name} plays ${cardName(card)}`, kind: 'play' });
       if (g.trick.length === g.n) {
         const winner = trickWinner(g.trick, g.trumpSuit);
         g.players[winner].tricks++;
         g.log.push({ by: 'System', card: `${g.players[winner].name} wins the trick`, kind: 'trickEnd' });
+        g.log.push({ by: 'System', card: `${g.players[winner].name} leads next`, kind: 'lead' });
         g.lastTrick = { cards: g.trick, winner };
         g.trick = [];
         g.turn = winner;

@@ -140,14 +140,27 @@
     return `<section class="panel recent-panel"><div class="panel-tag">RECENT TABLES</div><div class="recent-tables">${rows}</div></section>`;
   }
 
+  function tableByCode(code) {
+    return S.publicTables.find((t) => t.code === code) || null;
+  }
+
+  function tableJoinModeOptions(t) {
+    if (!t) return ['join'];
+    if (t.status === 'playing') return ['spectate'];
+    return ['join', 'spectate'];
+  }
+
+  function askJoinMode(code, t) {
+    const modes = tableJoinModeOptions(t);
+    if (modes.length === 1) return joinTable(code, modes[0]);
+    const wantJoin = confirm('Join as a player? Press Cancel to spectate.');
+    joinTable(code, wantJoin ? 'join' : 'spectate');
+  }
+
   function publicTableAction(t) {
-    if (t.status === 'playing') {
-      // For in-progress games, show both options if seats available
-      if (t.members < t.seats) return { label: 'Join / Spectate', disabled: false, cls: '' };
-      return { label: 'Spectate', disabled: false, cls: 'ghost' };
-    }
+    if (t.status === 'playing') return { label: 'Spectate', disabled: false, cls: 'ghost' };
     if (t.members >= t.seats) return { label: 'Full', disabled: true, cls: 'ghost' };
-    return { label: 'Join', disabled: false, cls: '' };
+    return { label: 'Join / Spectate', disabled: false, cls: '' };
   }
 
   function publicTablesHTML() {
@@ -160,9 +173,11 @@
     return `<section class="panel public-tables-panel"><div class="row" style="justify-content:space-between"><div><div class="panel-tag">SESSIONS IN PROGRESS <span class="session-count">${count}</span></div><p class="public-help">Open lobbies can be joined; active games can be watched.</p></div><button class="btn ghost small" data-act="toggleSessions" aria-expanded="${S.sessionListOpen}">${S.sessionListOpen ? 'Hide' : 'Show'}</button></div>${S.sessionListOpen ? count ? `<div class="public-tables">${rows}</div>` : '<p class="hint">No active tables right now. Start one and invite friends!</p>' : ''}</section>`;
   }
 
-  function joinTable(code) {
+  function joinTable(code, mode) {
     if (!S.named || !S.name) return toast('Choose your player name first');
-    send({ t: 'join', code, name: S.name, avatar: S.avatar || undefined });
+    const msg = { t: 'join', code, name: S.name, avatar: S.avatar || undefined };
+    if (mode === 'spectate') msg.spectate = true;
+    send(msg);
   }
 
 
@@ -181,8 +196,10 @@
         S.ready = true;
         const code = hashCode();
         if (code && !S.room) {
-          if (S.named) send({ t: 'join', code, name: S.name, avatar: S.avatar });
-          else S.invite = code; // first visit via an invite link: ask for a name before joining
+          if (S.named) {
+            const t = tableByCode(code);
+            askJoinMode(code, t);
+          } else S.invite = code; // first visit via an invite link: ask for a name before joining
         }
         render();
         break;
@@ -402,9 +419,8 @@
       $watch.hidden = true;
       return;
     }
-    const names = sp.map((x) => x.name);
-    const shown = names.length > 2 ? `${names.slice(0, 2).join(', ')} +${names.length - 2}` : names.join(', ');
-    $watch.textContent = isSpectator() ? `👁 You are watching · ${sp.length} spectator${sp.length === 1 ? '' : 's'}` : `👁 ${shown} watching`;
+    if (isSpectator()) $watch.textContent = `👁 You are watching · ${sp.length} spectator${sp.length === 1 ? '' : 's'}`;
+    else $watch.textContent = `👁 ${sp.length}`;
     $watch.hidden = false;
   }
 
@@ -450,6 +466,13 @@
   }
 
   function renderInvite() {
+    const t = tableByCode(S.invite);
+    const modes = tableJoinModeOptions(t);
+    const canJoin = modes.includes('join');
+    const canSpectate = modes.includes('spectate');
+    const context = t
+      ? (t.status === 'playing' ? 'This game is already in progress.' : 'This table is waiting in the lobby.')
+      : 'Pick how you want to enter this table.';
     $app.innerHTML = `
     <main class="page">
       <header class="brand"><span class="brand-snd">${CardTable.sound.button()}</span>
@@ -458,7 +481,12 @@
         <p>Join table <b class="code-inline">${esc(S.invite)}</b> on Tableverse. Pick a name and an avatar so your friends know who you are.</p>
       </header>
       <section class="panel">${profileHTML()}</section>
-      <button class="btn big" data-act="joinInvite">Join table ${esc(S.invite)}</button>
+      <section class="panel"><p class="hint" style="text-align:left">${esc(context)}</p>
+        <div class="row" style="margin-top:10px; gap:10px; flex-wrap:wrap">
+          ${canJoin ? `<button class="btn big" data-act="joinInviteJoin">Join as player</button>` : ''}
+          ${canSpectate ? `<button class="btn ghost big" data-act="joinInviteSpectate">Spectate</button>` : ''}
+        </div>
+      </section>
       <button class="btn ghost" data-act="cancelInvite">Not now</button>
     </main>`;
   }
@@ -632,7 +660,7 @@
     const entries = (S.view && S.view.log) || [];
     const overlay = document.createElement('div');
     overlay.className = 'overlay activity-overlay';
-    overlay.innerHTML = `<div class="sheet activity-sheet" data-stop="1"><div class="row" style="justify-content:space-between"><h2>Game log</h2><button class="btn ghost small" data-log-close>Close</button></div>${entries.length ? `<ol class="activity-list">${entries.slice(-60).reverse().map((e) => `<li><b>${esc(e.by || 'System')}</b> <span>${esc(e.card || e.text || '')}</span></li>`).join('')}</ol>` : '<p class="hint">No plays yet.</p>'}</div>`;
+    overlay.innerHTML = `<div class="sheet activity-sheet" data-stop="1"><div class="row" style="justify-content:space-between"><h2>Game log</h2><button class="btn ghost small" data-log-close>Close</button></div>${entries.length ? `<ol class="activity-list">${entries.slice(-60).reverse().map((e) => `<li><span>${esc(e.card || e.text || '')}</span></li>`).join('')}</ol>` : '<p class="hint">No plays yet.</p>'}</div>`;
     overlay.addEventListener('click', (e) => { if (e.target === overlay || e.target.closest('[data-log-close]')) overlay.remove(); });
     document.body.appendChild(overlay);
   }
@@ -664,7 +692,7 @@
     if (log.length) {
       const details = document.createElement('details');
       details.className = 'game-log-inline';
-      details.innerHTML = `<summary>📜 Game log <span>${S.view.log.length} plays</span></summary><ol>${log.map((e) => `<li><b>${esc(e.by || 'System')}</b><span>${esc(e.card || e.text || '')}</span></li>`).join('')}</ol>`;
+      details.innerHTML = `<summary>📜 Game log <span>${S.view.log.length} plays</span></summary><ol>${log.map((e) => `<li><span>${esc(e.card || e.text || '')}</span></li>`).join('')}</ol>`;
       $app.querySelector('.wz')?.appendChild(details);
     }
     const bar = $app.querySelector('.wz-status');
@@ -683,10 +711,15 @@
     emotes: () => toggleEmoteBar(),
     activityLog: () => openActivityLog(),
     sound: () => { CardTable.sound.toggle(); render(); },
-    joinInvite: () => {
+    joinInviteJoin: () => {
       if (!S.named || !S.name) return toast('Please type your name first');
       store.set('ct_name', S.name);
-      send({ t: 'join', code: S.invite, name: S.name, avatar: S.avatar });
+      joinTable(S.invite, 'join');
+    },
+    joinInviteSpectate: () => {
+      if (!S.named || !S.name) return toast('Please type your name first');
+      store.set('ct_name', S.name);
+      joinTable(S.invite, 'spectate');
     },
     cancelInvite: () => {
       S.invite = '';
@@ -701,8 +734,8 @@
       const cur = S.room && S.room.visibility;
       send({ t: 'setVisibility', visibility: cur === 'public' ? 'private' : 'public' });
     },
-    rejoin: (el) => joinTable(el.dataset.code),
-    joinPublic: (el) => joinTable(el.dataset.code),
+    rejoin: (el) => askJoinMode(el.dataset.code, tableByCode(el.dataset.code)),
+    joinPublic: (el) => askJoinMode(el.dataset.code, tableByCode(el.dataset.code)),
     toggleSessions: () => { S.sessionListOpen = !S.sessionListOpen; store.set('ct_sessions_open', S.sessionListOpen ? '1' : '0'); render(); },
     leave: () => send({ t: 'leave' }),
     chat: () => (S.chatOpen ? closeChat() : openChat()),

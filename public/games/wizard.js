@@ -5,7 +5,7 @@
   const WC = window.WizardCards;
 
   // UI-only state that survives re-renders (the server is the source of truth for the game itself).
-  const ui = { selected: null, bid: null, scores: false, shownKey: null, timer: null, prevTrick: new Set(), ctx: null, latest: null, round: 0 };
+  const ui = { selected: null, queuedCard: null, bid: null, scores: false, shownKey: null, timer: null, prevTrick: new Set(), ctx: null, latest: null, round: 0 };
 
   const cardHTML = WC.cardHTML;
   const suitPill = (s) => `<span class="pill suit-${s}">${WC.suitIcon(s)} ${WC.SUITS[s].name}</span>`;
@@ -43,8 +43,10 @@
     if (v.phase === 'playing') {
       if (v.myTurn) {
         if (!v.trick.length && v.lastTrick && v.lastTrick.winner === v.me) return 'You won the trick! Your turn to lead.';
-        return wonPrefix(v) + (ui.selected ? 'Tap the card again, or press Play' : 'Your turn. Pick a card.');
+        if (ui.queuedCard) return 'Card queued. It will play automatically when your turn starts.';
+        return wonPrefix(v) + 'Your turn. Pick a card.';
       }
+      if (ui.queuedCard) return wonPrefix(v) + `${name(v.turn)} is playing… · your card is queued`;
       return wonPrefix(v) + `${name(v.turn)} is playing…`;
     }
     if (v.phase === 'roundEnd') return 'Round complete';
@@ -141,7 +143,12 @@
     const legal = new Set(v.legal);
     return v.hand
       .map((c, i) => {
-        const cls = [can && legal.has(c.id) ? 'playable' : '', can && !legal.has(c.id) ? 'dim' : '', ui.selected === c.id ? 'sel' : ''].join(' ');
+        const cls = [
+          can && legal.has(c.id) ? 'playable' : '',
+          can && !legal.has(c.id) ? 'dim' : '',
+          ui.selected === c.id ? 'sel' : '',
+          ui.queuedCard === c.id ? 'sel' : '',
+        ].join(' ');
         return cardHTML(c, { tag: 'button', cls: 'hc ' + cls, attrs: `data-wz="card" data-id="${c.id}" style="${i ? `margin-left:${-z.overlap}px` : ''}"` });
       })
       .join('');
@@ -206,8 +213,15 @@
       ui.prevTrick = new Set();
     }
     if (!v.myTurn || v.phase !== 'playing' || !v.hand.some((c) => c.id === ui.selected)) ui.selected = null;
+    if (!v.hand.some((c) => c.id === ui.queuedCard)) ui.queuedCard = null;
     if (!v.myTurn || v.phase !== 'bidding') ui.bid = null;
     if (ui.bid !== null && ui.bid === v.forbiddenBid) ui.bid = null;
+    if (v.phase === 'playing' && v.myTurn && ui.queuedCard && v.legal.includes(ui.queuedCard)) {
+      const id = ui.queuedCard;
+      ui.queuedCard = null;
+      ui.selected = id;
+      ctx.act({ type: 'play', cardId: id });
+    }
 
     // Show the round/game results a moment after the last trick, so the final trick is visible.
     const key = v.phase + ':' + v.round;
@@ -261,11 +275,23 @@
         if (v.phase !== 'playing') return toast(v.phase === 'bidding' ? 'Place your bid first' : 'Wait for the next round');
         if (v._hold) return toast('The trick is being collected…');
         if (v.autoPlay) return toast('Your last card is played automatically');
-        if (!v.myTurn) return toast('Not your turn yet');
-        if (!v.legal.includes(card.id)) return toast('You must follow the lead suit if you can');
-        // Single tap: select & play immediately if it's your turn
-        ui.selected = card.id;
-        ctx.act({ type: 'play', cardId: card.id });
+        if (v.myTurn) {
+          if (!v.legal.includes(card.id)) return toast('You must follow the lead suit if you can');
+          // Single tap on your turn: play immediately.
+          ui.selected = card.id;
+          ui.queuedCard = null;
+          ctx.act({ type: 'play', cardId: card.id });
+          break;
+        }
+        // If it is not your turn yet, tap once to queue your intended card.
+        if (ui.queuedCard === card.id) {
+          ui.queuedCard = null;
+          toast('Queued card cleared');
+        } else {
+          ui.queuedCard = card.id;
+          toast('Card queued. It will auto-play on your turn if still legal.');
+        }
+        ctx.rerender();
         break;
       }
       case 'play':

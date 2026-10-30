@@ -18,6 +18,7 @@
       case 'star': return `⭐ Throwing star: ${e.discards.map((d) => `${nm(d.player)} <b>${d.card}</b>`).join(', ')}`;
       case 'starPropose': return `⭐ ${nm(e.by)} suggests a throwing star`;
       case 'starCancel': return `${nm(e.by)} cancelled the throwing star`;
+      case 'starResume': return '✅ Everyone agreed to continue';
       case 'cleared': return `Level ${e.level} cleared!${e.bonus && e.bonus.life ? ' +1 life' : ''}${e.bonus && e.bonus.star ? ' +1 ⭐' : ''}`;
       case 'level': return `Level ${e.level}: play your cards in ascending order`;
       case 'won': return 'You did it!';
@@ -82,6 +83,10 @@
     }
     if (v.phase !== 'playing') return '';
     const low = v.hand[0];
+    if (v.waitingAfterStar) {
+      const msg = `⭐ Everyone discarded their lowest card. ${v.waitingAfterStarCount} player${v.waitingAfterStarCount === 1 ? '' : 's'} still need to continue.`;
+      return `<div class="tm-starvote"><span>${msg}</span>${v.canResume ? '<button class="btn small" data-tm="resumeAfterStar">Continue</button>' : '<span class="hint">Waiting for others…</span>'}</div>`;
+    }
     const star = v.options.shurikens
       ? v.starPending && v.players[v.me] && !v.players[v.me].voted && v.hand.length
         ? `<div class="tm-starvote"><span>⭐ Throw a star? Everyone discards their lowest card.</span><button class="btn small" data-tm="star">Agree</button><button class="btn ghost small" data-tm="cancelStar">No</button></div>`
@@ -171,7 +176,11 @@
         playLowest();
         break;
       case 'star':
+        if (!confirm('Use a throwing star? Everyone will discard their lowest card.')) return;
         ctx.act({ type: 'shuriken' });
+        break;
+      case 'resumeAfterStar':
+        ctx.act({ type: 'ready' });
         break;
       case 'cancelStar':
         ctx.act({ type: 'shuriken', cancel: true });

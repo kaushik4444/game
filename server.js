@@ -449,6 +449,7 @@ function start(opts = {}) {
       applyProfile(p, msg);
       if (!room) return sendError(p, `No table with code ${code || '?'}`);
       if (p.room === code && (room.members.some((m) => m.id === p.id) || isSpec(room, p.id))) return broadcast(room);
+      const wantsSpectate = msg.spectate === true;
       if (room.status !== 'lobby') {
         // the game is already running: the newcomer watches
         if (room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
@@ -456,6 +457,16 @@ function start(opts = {}) {
         addSpectator(room, p);
         sys(room, `👁 ${p.name} is watching`);
         notifyOthers(room, p.id, `👁 ${p.name} is watching the game`);
+        broadcast(room);
+        sendChatLog(p, room);
+        return;
+      }
+      if (wantsSpectate) {
+        if (room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
+        if (p.room) leaveRoom(p);
+        addSpectator(room, p);
+        sys(room, `👁 ${p.name} is watching`);
+        notifyOthers(room, p.id, `👁 ${p.name} is watching the lobby`);
         broadcast(room);
         sendChatLog(p, room);
         return;

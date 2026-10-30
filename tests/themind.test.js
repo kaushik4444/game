@@ -139,6 +139,11 @@ test('a star needs everybody with cards to agree, then discards each lowest card
   assert.deepEqual(g.hands, [[50], [60], [70]]);
   assert.equal(g.event.type, 'star');
   assert.deepEqual(g.event.discards.map((d) => d.card), [10, 20, 30]);
+  assert.equal(g.starPaused, true);
+  must(g, 'p0', { type: 'ready' });
+  must(g, 'p1', { type: 'ready' });
+  must(g, 'p2', { type: 'ready' });
+  assert.equal(g.starPaused, false);
 });
 
 test('stars can be cancelled, run out, or be switched off', () => {
@@ -203,6 +208,10 @@ test('400 games with imperfect timing always finish; bots only ever act legally'
       if (g.phase === 'ready' || g.phase === 'levelEnd') { readyAll(g); continue; }
       // the right player usually goes first, sometimes somebody jumps the gun
       const withCards = g.players.filter((p, i) => g.hands[i].length);
+      if (g.starPaused) {
+        for (const p of withCards) must(g, p.id, { type: 'ready' });
+        continue;
+      }
       const right = holder(g, lowest(g));
       const pick = rng() < 0.93 ? right : withCards[Math.floor(rng() * withCards.length)].id;
       if (g.stars > 0 && rng() < 0.03) { for (const p of withCards) must(g, p.id, { type: 'shuriken' }); continue; }

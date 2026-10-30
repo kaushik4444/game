@@ -66,6 +66,8 @@ function createGame(players, options, rng) {
     pile: [], // { card, player }
     discarded: [], // cards thrown away this level (mistakes and stars), public: { card, player, why }
     votes: new Set(), // player indices that agree to throw a star
+    starReady: new Set(), // player indices that are ready to continue after a star discard
+    starPaused: false, // waits for players to confirm before the level continues after a star
     event: null, // latest public event, with a rising seq
     seq: 0,
     version: 0, // bumped on every state change (bots use it to cache their timing)
@@ -94,6 +96,8 @@ function dealLevel(g) {
   g.pile = [];
   g.discarded = [];
   g.votes = new Set();
+  g.starReady = new Set();
+  g.starPaused = false;
   g.ready = new Set();
   g.phase = 'playing';
   emit(g, { type: 'level', level: g.level });
@@ -144,11 +148,17 @@ function checkStar(g) {
   discards.sort((a, b) => a.card - b.card);
   for (const d of discards) g.log.push({ by: g.players[d.player].name, card: `discarded ${d.card} (star)`, kind: 'star' });
   g.votes = new Set();
+  g.starReady = new Set();
+  g.starPaused = true;
   emit(g, { type: 'star', discards });
-  finishLevelIfDone(g);
+  if (g.hands.every((h) => h.length === 0)) {
+    g.starPaused = false;
+    finishLevelIfDone(g);
+  }
 }
 
 function playLowest(g, who, expect) {
+  if (g.starPaused) return { ok: false, error: 'Wait until everyone confirms after the star' };
   const hand = g.hands[who];
   if (!hand.length) return { ok: false, error: 'You have no cards left' };
   const card = hand[0];
@@ -191,6 +201,18 @@ function applyAction(g, playerId, action) {
   let res;
   switch (action.type) {
     case 'ready':
+      if (g.phase === 'playing' && g.starPaused) {
+        g.starReady.add(who);
+        const need = g.hands.map((h, i) => (h.length ? i : -1)).filter((i) => i >= 0);
+        if (!need.length || need.every((i) => g.starReady.has(i))) {
+          g.starPaused = false;
+          g.starReady = new Set();
+          emit(g, { type: 'starResume', by: who });
+          finishLevelIfDone(g);
+        }
+        res = { ok: true };
+        break;
+      }
       if (g.phase !== 'ready' && g.phase !== 'levelEnd') return { ok: false, error: 'No level is waiting to start' };
       g.ready.add(who);
       if (g.ready.size >= g.n) {
@@ -211,6 +233,7 @@ function applyAction(g, playerId, action) {
     }
     case 'shuriken': {
       if (g.phase !== 'playing') return { ok: false, error: 'Stars can only be thrown during a level' };
+      if (g.starPaused) return { ok: false, error: 'Confirm continue after the current star first' };
       if (!g.options.shurikens) return { ok: false, error: 'Throwing stars are switched off' };
       if (action.cancel) {
         g.votes = new Set();
@@ -238,7 +261,10 @@ function applyAction(g, playerId, action) {
 
 function awaitingList(g) {
   if (g.phase === 'ready' || g.phase === 'levelEnd') return g.players.filter((p, i) => !g.ready.has(i)).map((p) => p.id);
-  if (g.phase === 'playing') return g.players.filter((p, i) => g.hands[i].length).map((p) => p.id);
+  if (g.phase === 'playing') {
+    if (g.starPaused) return g.players.filter((p, i) => g.hands[i].length && !g.starReady.has(i)).map((p) => p.id);
+    return g.players.filter((p, i) => g.hands[i].length).map((p) => p.id);
+  }
   return [];
 }
 
@@ -253,6 +279,7 @@ function tableTop(g) {
 function botAction(g, playerId) {
   const who = indexOf(g, playerId);
   if (g.phase === 'ready' || g.phase === 'levelEnd') return { type: 'ready' };
+  if (g.phase === 'playing' && g.starPaused) return { type: 'ready' };
   if (g.phase === 'playing' && g.votes.size && g.stars > 0 && who >= 0 && !g.votes.has(who) && g.hands[who].length) return { type: 'shuriken' };
   return { type: 'play' };
 }
@@ -288,8 +315,14 @@ function viewFor(g, playerId) {
     discarded: g.discarded.map((d) => ({ card: d.card, player: d.player, why: d.why })),
     votes: [...g.votes],
     starPending: g.votes.size > 0 && g.phase === 'playing',
-    canStar: g.phase === 'playing' && g.options.shurikens && g.stars > 0 && me >= 0 && hand.length > 0,
+    canStar: g.phase === 'playing' && !g.starPaused && g.options.shurikens && g.stars > 0 && me >= 0 && hand.length > 0,
+    starPaused: g.starPaused,
+    starReady: [...g.starReady],
     event: g.event,
+    canResume: g.phase === 'playing' && g.starPaused && me >= 0 && hand.length > 0 && !g.starReady.has(me),
+    waitingAfterStar: g.phase === 'playing' && g.starPaused,
+    waitingAfterStarCount: g.phase === 'playing' && g.starPaused ? g.hands.filter((h, i) => h.length && !g.starReady.has(i)).length : 0,
+    starDiscardCount: g.discarded.filter((d) => d.why === 'star').length,
     clearedBonus: g.phase === 'levelEnd' && g.event && g.event.type === 'cleared' ? g.event.bonus : null,
     upcomingBonus: bonusFor(nextLevel, g.options, g.maxLevel),
     stats: Object.assign({}, g.stats),

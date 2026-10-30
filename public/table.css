@@ -369,6 +369,6 @@ button.card { cursor: pointer; }
 .chat-form input { flex: 1; min-width: 0; font-size: 16px; }
 
 /* spectators */
-.watchers { position: fixed; z-index: 20; left: 10px; top: calc(env(safe-area-inset-top) + 60px); max-width: 60vw; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--panel-line); background: rgba(14, 15, 46, .85); color: var(--ink); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.watchers { position: fixed; z-index: 20; left: 10px; top: calc(env(safe-area-inset-top) + 60px); max-width: 60vw; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--panel-line); background: rgba(14, 15, 46, .85); color: var(--ink); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 36px; text-align: center; }
 .watchers[hidden] { display: none; }
 @media (max-width: 520px) { .wz-top .row { gap: 4px; } .wz-top .btn.small { padding: 6px 8px; } }

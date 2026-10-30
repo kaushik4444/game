@@ -54,6 +54,7 @@ module.exports = {
       if (c && c.v === g.version) return c.d;
       let d;
       if (g.phase === 'ready' || g.phase === 'levelEnd') d = 700 + r() * 900;
+      else if (g.starPaused) d = 700 + r() * 1200;
       else if (g.votes.size && g.stars > 0 && !g.votes.has(idx)) d = 600 + r() * 900;
       else {
         const hand = g.hands[idx];
