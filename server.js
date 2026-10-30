@@ -216,9 +216,17 @@ function start(opts = {}) {
       };
     } else {
       const ms = waiting.map((id) => room.members.find((x) => x.id === id)).filter(Boolean);
-      const who = ms.find((m) => m.bot) || ms.find((m) => !m.bot && !isConnected(m));
+      const bots = ms.filter((m) => m.bot);
+      let who = bots[0] || ms.find((m) => !m.bot && !isConnected(m));
+      let botMs = null;
+      if (bots.length && typeof g.botDelayMs === 'function') {
+        // a real-time game (The Mind) times its bots itself: the bot that wants to play soonest goes next
+        const t = bots.map((m) => ({ m, d: g.botDelayMs(m.id) })).sort((x, y) => x.d - y.d)[0];
+        who = t.m;
+        botMs = Math.max(0, t.d);
+      }
       if (who) {
-        delay = Math.max(who.bot ? rand(botDelay[0], botDelay[1]) : absentMs, pause);
+        delay = Math.max(who.bot ? (botMs !== null ? botMs : rand(botDelay[0], botDelay[1])) : absentMs, pause);
         run = () => g.act(who.id, g.botAction(who.id));
         valid = () => awaitingOf(g).includes(who.id) && (who.bot || !isConnected(who));
       } else if (room.deadline) {

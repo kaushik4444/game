@@ -4,6 +4,8 @@ Browser-based multiplayer card and board games. Phone or desktop, no install.
 
 - **Wizard**: 3–6 players (the host picks the seat count), variants (Plus / Minus 1, Hidden prediction, Secret prediction), Foresight, short game.
 - **29**: 4 players in two teams, secret trump, 3/6/9 game-point matches.
+- **Poker (Texas Hold'em)**: 2–8 players with chips, blinds, side pots and all-ins. Options: starting chips (1,000 / 2,000 / 5,000), blinds that rise never / every 10 / 6 / 3 hands, and the game ends when one player has everything or after 10 / 20 / 30 hands.
+- **The Mind**: 2–4 players, cooperative and real-time. No turns, no hints: play your numbers (1–100) in ascending order by feel. Lives, throwing stars, standard / easy / hard.
 
 Bots can fill any open seat.
 
@@ -21,45 +23,14 @@ Bots can fill any open seat.
 
 Open `/scorecard.html` (link on the home screen). Add 3 to 6 players, then for each round enter every player's bid, then the tricks each one won; scores are worked out automatically (exact = 20 + 10 per trick, otherwise −10 per trick off). It shows the dealer and who bids first, warns when the total bid equals the tricks (Plus / Minus 1 rule), has a Scores table with totals, lets you tap a round to correct it, undo the last round, and copy the scores. It saves on the device and works offline after the first visit. It does not need a table or an account.
 
+## Poker
+
+Full No-Limit Texas Hold'em: dealer button, small and big blind (heads-up rules for two players), pre-flop / flop / turn / river, check / call / bet / raise (min-raise rules, incomplete all-in raises do not reopen betting), all-in, side pots, split pots, uncalled bets returned, showdown with the best five of seven cards. A 4-colour deck keeps suits easy to tell apart. The raise bar has Min / ½ pot / ¾ pot / Pot / All-in shortcuts and a slider. Bots bluff, fold, call and raise. Chat, spectators, reactions and the turn time limit work as in the other games (when time runs out a bot plays for you). `npm test` simulates 300 bot-only games and checks chips are conserved.
+
+## The Mind
+
+Cooperative and real-time. Level N deals N cards to each player; together you must play every card in ascending order without talking. Press *Play* (or Space on a keyboard) to put down your lowest card. Playing while someone holds a lower card costs a life and reveals and discards the lower cards. Throwing stars (everyone agrees) discard everybody's lowest card. 2 / 3 / 4 players play 12 / 10 / 8 levels with 2 / 3 / 4 lives; clearing certain levels earns a life or a star. Bots play on a rhythm that depends on how far their number is from the pile, so the table feels alive. There is no turn time limit in this game. Options: difficulty (standard / easy / hard) and throwing stars on or off. The server lets a game time its bots itself (`botDelayMs`) which is what makes this possible.
+
 ## Roadmap (next phase)
 
-Poker, The Mind and Saboteur.
-
-## Run
-
-```
-npm install
-npm start          # http://localhost:3000   (PORT env var to change)
-npm test           # rules tests + full end-to-end game over WebSockets
-```
-
-Players open the site, one creates a table, others join with the 4-letter code or the invite link (`/#ABCD`).
-To play over the internet, deploy to any Node host (Render, Railway, Fly.io…): it is one process, `npm start`, with WebSockets on the same port.
-
-## Share it with friends
-
-Players only need a link. Everyone opens the site, one person creates a table, and the others join with the 4-letter code or the invite link (`https://your-site/#ABCD`). The lobby has Copy link, WhatsApp and Share buttons.
-
-For friends to reach it, the server has to be reachable from the internet:
-
-| Option | Effort | Notes |
-| --- | --- | --- |
-| **Render** (free) | ~5 min | Push to GitHub, then on render.com choose New > Blueprint and pick the repo (`render.yaml` is included), or New > Web Service with build `npm install` and start `npm start`. You get an `https://….onrender.com` link. The free plan sleeps after ~15 min idle (first visit takes ~30 s) and a restart ends games in progress. |
-| **Railway / Fly.io** | ~10 min | A `Dockerfile` is included. Same idea: connect the repo and deploy. Paid plans stay awake. |
-| **Tonight, from your PC** | 1 min | Run `npm start`, then in another terminal `npx cloudflared tunnel --url http://localhost:3000` (or `ngrok http 3000`). Share the `https://….trycloudflare.com` link. Works while your PC is on. |
-| **Same Wi-Fi** | 0 min | Open `http://<your-PC-ip>:3000` on the other devices. |
-
-WebSockets work on all of these with no extra setup, and the client switches to `wss://` automatically on https. Run a single instance: games live in server memory.
-
-## How it works
-
-- `server.js`: static files, WebSocket lobby, rooms, chat, spectators, bots, turn timers, reconnection (token in the browser). State lives in memory.
-- `games/common.js`: options every game shares (turn time limit).
-- `games/<id>/`: one folder per game. `engine.js` is pure rules, `index.js` plugs it into the server. See `games/README.md`.
-- `public/`: vanilla JS client. `app.js` = home/lobby, `games/<id>.js` = that game's table.
-
-Behaviour worth knowing: a dropped player is replaced by a bot after 15 s and can rejoin by reopening the page; leaving mid-game hands the seat to a bot; empty tables are removed after 10 min; the server holds all hidden info (each player is only sent their own hand).
-
-## Wizard rules implemented
-
-60 cards (4 suits × 1–13, 4 Wizards, 4 Jesters). Round *n* deals *n* cards; the next card sets trump (Wizard: dealer chooses; Jester or last round: no trump). Bid exact tricks; follow suit (Wizards/Jesters always playable); first Wizard wins, else highest trump, else highest of the led suit. Score: exact = 20 + 10 per trick, otherwise −10 per trick off. Optional house rule: dealer can't make bids total the number of tricks.
+Saboteur.

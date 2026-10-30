@@ -109,6 +109,10 @@
       tone(1046.5, 0.5, 0.6, { type: 'sine', vol: 0.18, slide: 1.05 });
     },
     emote: () => tone(783.99, 0, 0.1, { type: 'sine', vol: 0.12, slide: 1.3 }),
+    // poker chips: a few soft clinks
+    chip: () => { [0, 0.05, 0.1].forEach((t, i) => { tone(2000 + i * 220, t, 0.05, { type: 'triangle', vol: 0.06 }); swish(t, 0.03, { vol: 0.1, f0: 6000, f1: 3800, q: 1.5 }); }); },
+    allin: () => { for (let i = 0; i < 7; i++) { const t = i * 0.05; tone(1800 + (i % 3) * 260, t, 0.05, { type: 'triangle', vol: 0.05 }); swish(t, 0.03, { vol: 0.09, f0: 6000, f1: 3800, q: 1.5 }); } tone(140, 0.3, 0.3, { type: 'sine', vol: 0.15, slide: 0.6 }); },
+    fold: () => swish(0, 0.14, { vol: 0.18, f0: 3200, f1: 900, q: 0.7 }),
   };
 
   window.CardTable = window.CardTable || {};

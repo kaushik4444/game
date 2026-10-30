@@ -194,7 +194,7 @@ function client(port, name, token) {
   // --- empty seats are filled with bots on start; second game (29) is registered
   const c = client(port, 'Cara');
   await c.until(() => c.id, 'welcome C');
-  assert.deepEqual(c.games.map((g) => g.id).sort(), ['twentynine', 'wizard']);
+  assert.deepEqual(c.games.map((g) => g.id).sort(), ['poker', 'themind', 'twentynine', 'wizard']);
   const wiz = c.games.find((g) => g.id === 'wizard');
   assert.deepEqual([wiz.seats.min, wiz.seats.max], [3, 6]);
   assert.ok(wiz.options.find((o) => o.key === 'variant').choices.length === 4);
@@ -213,6 +213,54 @@ function client(port, name, token) {
   console.log('  ok  seats setting, bot fill on start, second game registered');
   c.send({ t: 'leave' });
   c.ws.close();
+
+  // --- Poker over the wire: a human plays check/call against bots for a few hands
+  const pk = client(port, 'Pia');
+  await pk.until(() => pk.id, 'welcome P');
+  pk.send({ t: 'create', gameId: 'poker' });
+  await pk.until(() => pk.room && pk.room.gameId === 'poker', 'poker table');
+  pk.send({ t: 'setSeats', seats: 4 });
+  pk.send({ t: 'setOptions', options: { timeLimit: 'off', limit: '10' } });
+  await pk.until(() => pk.room.options.limit === '10', 'poker options');
+  pk.send({ t: 'start' });
+  await pk.until(() => pk.view && pk.view.game === 'poker', 'poker started');
+  assert.equal(pk.view.hand.length, 2);
+  assert.equal(pk.view.players.length, 4);
+  let lastKey = '';
+  pk.playing = false;
+  const pkStep = () => {
+    const v = pk.view;
+    if (!v || !v.myTurn) return;
+    const key = v.handNo + ':' + v.street + ':' + v.currentBet + ':' + v.pot;
+    if (key === lastKey) return;
+    lastKey = key;
+    pk.send({ t: 'act', action: { type: v.canCheck ? 'check' : 'call' } });
+  };
+  pk.step = pkStep;
+  pk.playing = true;
+  pkStep();
+  await pk.until(() => pk.view.handNo >= 3 || pk.view.phase === 'gameOver', 'poker hands are played');
+  assert.ok(pk.view.players.every((p) => p.cards === null || pk.view.phase !== 'betting'));
+  console.log('  ok  poker: create, start with bots, play hands over WebSocket');
+  pk.send({ t: 'leave' });
+  pk.ws.close();
+
+  // --- The Mind over the wire: bots ready up on their own, the level is dealt, only my own cards are visible
+  const tm = client(port, 'Tom');
+  await tm.until(() => tm.id, 'welcome Tom');
+  tm.send({ t: 'create', gameId: 'themind' });
+  await tm.until(() => tm.room && tm.room.gameId === 'themind', 'mind table');
+  tm.send({ t: 'setSeats', seats: 3 });
+  tm.send({ t: 'start' });
+  await tm.until(() => tm.view && tm.view.game === 'themind' && tm.view.phase === 'ready', 'mind started');
+  tm.send({ t: 'act', action: { type: 'ready' } });
+  await tm.until(() => tm.view.phase === 'playing', 'level 1 dealt once everybody is ready');
+  assert.equal(tm.view.hand.length, 1);
+  assert.deepEqual(tm.view.players.map((p) => p.cards), [1, 1, 1]);
+  assert.equal(tm.room.deadline, null, 'no turn clock in a real-time game');
+  console.log('  ok  the mind: create, bots ready up, level dealt');
+  tm.send({ t: 'leave' });
+  tm.ws.close();
 
   // --- turn time limit: a bot plays for a human who does not act; "off" disables it
   const fast = await start({ port: 0, botDelay: [0, 3], autoAdvanceMs: 20, absentMs: 60000, trickPauseMs: 0, forcedMs: 0, timeScale: 0.01, maxMsgsPerSec: Infinity });

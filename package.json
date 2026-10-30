@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node tests/engine.test.js && node tests/twentynine.test.js && node tests/smoke.test.js"
+    "test": "node tests/engine.test.js && node tests/twentynine.test.js && node tests/poker.test.js && node tests/themind.test.js && node tests/smoke.test.js"
   },
   "dependencies": {
     "ws": "^8.18.0"

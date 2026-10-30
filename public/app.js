@@ -231,7 +231,7 @@
     const snd = CardTable.sound;
     if (!b || !snd) return;
     if (!a || a.phase === undefined) return;
-    if (b.phase === 'gameOver' && a.phase !== 'gameOver') return snd.play('fanfare');
+    if (b.phase === 'gameOver' && a.phase !== 'gameOver') return snd.play(b.won === false ? 'lose' : 'fanfare'); // co-op games report won=false when the team loses
     if ((b.phase === 'roundEnd' || b.phase === 'handEnd') && a.phase !== b.phase) return snd.play('round');
     if (b.lastTrick && (!a.lastTrick || JSON.stringify(a.lastTrick) !== JSON.stringify(b.lastTrick)) && b.trick && !b.trick.length) {
       snd.play(b.lastTrick.winner === b.me ? 'win' : 'card');

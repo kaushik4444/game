@@ -41,9 +41,9 @@
   function seatHTML(o) {
     const face = o.avatar ? esc(o.avatar) : esc([...o.name][0] || '?').toUpperCase();
     return `<div class="pseat ${o.first ? 'first' : ''} ${o.turn ? 'turn' : ''} ${o.me ? 'me' : ''} ${o.team !== undefined ? 'team' + o.team : ''}" data-pid="${esc(o.pid)}">
-      <div class="badges">${o.dealer ? '<span class="bdg d" title="Dealer">Dealer</span>' : ''}${o.first ? '<span class="bdg f" title="Bids and leads first this round">1st</span>' : ''}</div>
+      <div class="badges">${o.dealer ? '<span class="bdg d" title="Dealer">Dealer</span>' : ''}${o.first ? '<span class="bdg f" title="Bids and leads first this round">1st</span>' : ''}${o.badges || ''}</div>
       <div class="av" style="--avbg:${avatarColor(o.name)}"><span class="face">${face}</span>${o.extra || ''}</div>
-      <div class="plate"><b>${esc(o.name)}</b><span>${esc(o.sub || '')}</span></div>
+      <div class="plate"><b>${esc(o.name)}</b><span>${esc(o.sub || '')}</span></div>${o.under || ''}
     </div>`;
   }
 

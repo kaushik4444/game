@@ -3,6 +3,8 @@
 const registry = {
   wizard: require('./wizard'),
   twentynine: require('./twentynine'),
+  poker: require('./poker'),
+  themind: require('./themind'),
 };
 
 module.exports = {
