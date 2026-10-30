@@ -153,8 +153,21 @@
   function askJoinMode(code, t) {
     const modes = tableJoinModeOptions(t);
     if (modes.length === 1) return joinTable(code, modes[0]);
-    const wantJoin = confirm('Join as a player? Press Cancel to spectate.');
-    joinTable(code, wantJoin ? 'join' : 'spectate');
+    const overlay = document.createElement('div');
+    overlay.className = 'overlay';
+    const label = t && t.status === 'playing' ? 'This table is in progress.' : 'Choose how to enter this table.';
+    overlay.innerHTML = `<div class="sheet" data-stop="1" role="dialog" aria-label="Join or spectate"><h2>Join table ${esc(code)}</h2><p class="hint">${esc(label)}</p><div class="row" style="margin-top:12px; gap:10px; flex-wrap:wrap"><button class="btn" data-join-mode="join">Join as player</button><button class="btn ghost" data-join-mode="spectate">Spectate</button></div><div class="row" style="margin-top:10px"><button class="btn ghost small" data-join-close="1">Cancel</button></div></div>`;
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay || e.target.closest('[data-join-close]')) {
+        overlay.remove();
+        return;
+      }
+      const pick = e.target.closest('[data-join-mode]');
+      if (!pick) return;
+      overlay.remove();
+      joinTable(code, pick.dataset.joinMode);
+    });
+    document.body.appendChild(overlay);
   }
 
   function publicTableAction(t) {

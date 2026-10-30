@@ -89,7 +89,7 @@
     }
     const star = v.options.shurikens
       ? v.starPending && v.players[v.me] && !v.players[v.me].voted && v.hand.length
-        ? `<div class="tm-starvote"><span>⭐ Throw a star? Everyone discards their lowest card.</span><button class="btn small" data-tm="star">Agree</button><button class="btn ghost small" data-tm="cancelStar">No</button></div>`
+        ? `<div class="tm-starvote"><span>⭐ Everyone agrees to discard their lowest card. Do you agree?</span><button class="btn small" data-tm="star">Agree</button><button class="btn ghost small" data-tm="cancelStar">No</button></div>`
         : v.starPending && v.players[v.me].voted
           ? `<div class="tm-starvote"><span>⭐ Waiting for the others to agree…</span><button class="btn ghost small" data-tm="cancelStar">Cancel</button></div>`
           : ''
@@ -176,7 +176,6 @@
         playLowest();
         break;
       case 'star':
-        if (!confirm('Use a throwing star? Everyone will discard their lowest card.')) return;
         ctx.act({ type: 'shuriken' });
         break;
       case 'resumeAfterStar':
