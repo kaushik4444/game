@@ -65,6 +65,7 @@ input[type=text]:focus-visible, .btn:focus-visible, button:focus-visible { outli
 .recent-table:hover { background: rgba(255,255,255,.1); }
 .recent-table span { color: var(--gold); font-size: 18px; }
 .recent-table code { color: var(--muted); font-size: 11px; margin-left: 4px; }
+.recent-table small { display: block; color: var(--muted); font-size: 11px; }
 .create-sheet { width: min(500px, calc(100vw - 28px)); }
 .visibility-options { display: grid; gap: 10px; margin-top: 14px; }
 .visibility-option { display: flex; gap: 11px; align-items: flex-start; padding: 13px; border: 1px solid var(--panel-line); border-radius: 13px; background: rgba(255,255,255,.035); cursor: pointer; text-align: left; }

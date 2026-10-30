@@ -117,7 +117,7 @@
 
   const hashCode = () => {
     const c = decodeURIComponent(location.hash.slice(1)).toUpperCase();
-    return /^[A-Z]{4}$/.test(c) ? c : '';
+    return /^[A-Z]{6}$/.test(c) ? c : '';
   };
   const setHash = (code) => {
     try { history.replaceState(null, '', code ? '#' + code : location.pathname + location.search); } catch { /* ignore */ }
@@ -132,16 +132,26 @@
 
   function recentTablesHTML() {
     if (!S.recentTables.length) return '';
-    const rows = S.recentTables.map((r) => `<button class="recent-table" data-act="rejoin" data-code="${esc(r.code)}"><span>↺</span><b>${esc(r.name)}</b><code>${esc(r.code)}</code></button>`).join('');
+    const rows = S.recentTables.map((r) => {
+      const live = S.publicTables.find((t) => t.code === r.code);
+      const status = live ? (live.status === 'playing' ? 'In progress' : 'Available') : 'Expired or private';
+      return `<button class="recent-table" data-act="rejoin" data-code="${esc(r.code)}"><span>↺</span><b>${esc(r.name)}</b><code>${esc(r.code)}</code><small>${status}</small></button>`;
+    }).join('');
     return `<section class="panel recent-panel"><div class="panel-tag">RECENT TABLES</div><div class="recent-tables">${rows}</div></section>`;
+  }
+
+  function publicTableAction(t) {
+    if (t.status === 'playing') return { label: 'Spectate', disabled: false, cls: 'ghost' };
+    if (t.members >= t.seats) return { label: 'Full', disabled: true, cls: 'ghost' };
+    return { label: 'Join', disabled: false, cls: '' };
   }
 
   function publicTablesHTML() {
     const count = S.publicTables.length;
     const rows = S.publicTables.map((t) => {
       const g = gameMeta(t.gameId) || { name: t.gameId, icon: '🎴' };
-      const started = t.status === 'playing';
-      return `<div class="public-table"><span class="public-game-icon">${esc(g.icon || '🎴')}</span><div class="public-table-info"><b>${esc(g.name)}</b><span>${esc(t.host)}'s table · ${t.members}/${t.seats} players${t.spectators ? ` · 👁 ${t.spectators}` : ''}</span></div><button class="btn ${started ? 'ghost' : ''} small" data-act="joinPublic" data-code="${esc(t.code)}">${started ? 'Spectate' : 'Join'}</button></div>`;
+      const action = publicTableAction(t);
+      return `<div class="public-table"><span class="public-game-icon">${esc(g.icon || '🎴')}</span><div class="public-table-info"><b>${esc(g.name)}</b><span>${esc(t.host)}'s table · ${t.members}/${t.seats} players${t.spectators ? ` · 👁 ${t.spectators}` : ''}</span></div><button class="btn ${action.cls} small" data-act="joinPublic" data-code="${esc(t.code)}" ${action.disabled ? 'disabled' : ''}>${action.label}</button></div>`;
     }).join('');
     return `<section class="panel public-tables-panel"><div class="row" style="justify-content:space-between"><div><div class="panel-tag">SESSIONS IN PROGRESS <span class="session-count">${count}</span></div><p class="public-help">Open lobbies can be joined; active games can be watched.</p></div><button class="btn ghost small" data-act="toggleSessions" aria-expanded="${S.sessionListOpen}">${S.sessionListOpen ? 'Hide' : 'Show'}</button></div>${S.sessionListOpen ? count ? `<div class="public-tables">${rows}</div>` : '<p class="hint">No active tables right now. Start one and invite friends!</p>' : ''}</section>`;
   }
@@ -505,9 +515,9 @@
         <section class="panel join-panel">
           <div class="panel-tag">QUICK ACCESS</div>
           <label class="label" for="code">Have a table code? Jump in</label>
-          <p class="join-sub">Enter the 4-letter code shared by your friend to join their game table immediately.</p>
+          <p class="join-sub">Enter the 6-letter code shared by your friend to join their game table immediately.</p>
           <form class="join-form" id="joinForm">
-            <input id="code" type="text" maxlength="4" placeholder="ABCD" autocomplete="off" autocapitalize="characters" spellcheck="false" value="${esc(S.draftCode)}">
+            <input id="code" type="text" maxlength="6" placeholder="ABCDEF" autocomplete="off" autocapitalize="characters" spellcheck="false" value="${esc(S.draftCode)}">
             <button class="btn big-join" type="submit">Join Table</button>
           </form>
           <div class="join-tips">💡 Anyone can also join via direct link: <code>site/#CODE</code></div>
@@ -750,8 +760,8 @@
   $app.addEventListener('submit', (e) => {
     if (e.target.id === 'joinForm') {
       e.preventDefault();
-      if (S.draftCode.length === 4) send({ t: 'join', code: S.draftCode, name: S.name || undefined, avatar: S.avatar || undefined });
-      else toast('Enter the 4-letter table code');
+      if (S.draftCode.length === 6) send({ t: 'join', code: S.draftCode, name: S.name || undefined, avatar: S.avatar || undefined });
+      else toast('Enter the 6-letter table code');
     }
   });
 

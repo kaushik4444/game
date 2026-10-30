@@ -83,13 +83,19 @@ function client(port, name, token) {
   assert.equal(a.games[0].id, 'wizard');
   a.send({ t: 'create', gameId: 'wizard', visibility: 'public' });
   await a.until(() => a.room, 'room created');
-  assert.match(a.room.code, /^[A-HJ-NP-Z]{4}$/);
+  assert.match(a.room.code, /^[A-HJ-NP-Z]{6}$/);
   assert.equal(a.room.hostId, a.id);
 
   const b = client(port, 'Bob');
   await b.until(() => b.id, 'welcome B');
   await b.until(() => b.tables.some((t) => t.code === a.room.code && t.status === 'lobby'), 'public lobby listing');
   assert.equal(b.tables.find((t) => t.code === a.room.code).members, 1);
+
+  // Public visibility changes are pushed to everyone browsing the directory.
+  a.send({ t: 'setVisibility', visibility: 'private' });
+  await b.until(() => !b.tables.some((t) => t.code === a.room.code), 'public table removed when made private');
+  a.send({ t: 'setVisibility', visibility: 'public' });
+  await b.until(() => b.tables.some((t) => t.code === a.room.code), 'private table listed when made public');
 
   const privateHost = client(port, 'Private Host');
   await privateHost.until(() => privateHost.id, 'welcome private host');

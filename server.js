@@ -289,7 +289,7 @@ function start(opts = {}) {
   function newCode() {
     for (;;) {
       let c = '';
-      for (let i = 0; i < 4; i++) c += CODE_CHARS[crypto.randomInt(CODE_CHARS.length)];
+      for (let i = 0; i < 6; i++) c += CODE_CHARS[crypto.randomInt(CODE_CHARS.length)];
       if (!rooms.has(c)) return c;
     }
   }
@@ -479,7 +479,7 @@ function start(opts = {}) {
       const room = hostRoom(p, 'lobby');
       if (!room) return;
       room.visibility = msg.visibility === 'public' ? 'public' : 'private';
-      broadcast(room);
+      broadcast(room); // also broadcasts the directory, removing private tables immediately
     },
 
     setSeats(p, msg) {

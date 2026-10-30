@@ -20,14 +20,21 @@ Bots can fill any open seat.
 - **New card sounds**: a swish + snap + thump for a played card, a riffle for dealing and a sweep when a trick is collected.
 - **Game activity log**: every table keeps a public play-by-play feed showing who bid, played, checked, folded, or used a special action. It is visible below the table on desktop and available from the 📜 Log button on smaller screens.
 - **Recent tables**: the home screen remembers the last five tables on this device and offers one-click rejoin while they still exist.
-- **Sessions in progress**: the home screen lists active public tables. Join a lobby before it starts, or spectate it once play has begun. Empty/disconnected tables expire automatically (15 minutes for lobbies, 60 minutes for stalled games).
+- **Sessions in progress**: the home screen lists active public tables. Join a lobby with an open seat, see `Full` when all seats are occupied, or spectate it once play has begun. Empty/disconnected tables expire automatically: rooms with no connected human players are removed after 10 minutes; otherwise inactive lobbies expire after 15 minutes and inactive games after 60 minutes.
 - **Private or public tables**: tables start Private by default. The host can switch a lobby between Private (invite code/link only) and Public (listed in Sessions in Progress) after inviting friends. Private tables never appear in the directory.
 
 > Tables are discoverable to everyone currently using Card Table. Do not put private information in table codes, player names, chat, or game logs.
 
 ## Multiplayer lifecycle
 
-Room state is in memory, so a server restart clears active sessions. Reconnecting with the same browser token restores a player to a live room while it remains on the server. Disconnected seats are covered by bots after the configured grace period; rooms with no connected human players are cleaned after 10 minutes.
+Room state is in memory, so a server restart clears active sessions. Reconnecting with the same browser token restores a player to a live room while it remains on the server. Disconnected seats are covered by bots after the configured grace period.
+
+**Room expiry rules:**
+1. If a room has no connected human for 10 minutes it is destroyed immediately.
+2. Otherwise, an inactive lobby (no player action for 15 minutes) is also destroyed.
+3. An inactive game (no player action for 60 minutes) is destroyed.
+
+Rules 2 and 3 are independent of whether humans are connected — they catch rooms that are technically alive but effectively abandoned.
 
 ## Browser verification
 
