@@ -176,6 +176,9 @@ function client(port, name, token) {
   await a2.until(() => a2.view && a2.room, 'A resumed into the same table');
   assert.equal(a2.id, a.id);
   assert.equal(a2.room.code, a.room.code);
+  // The reconnect can land in the short window between rounds (roundEnd) when every
+  // hand is empty; the server auto-advances almost immediately, so wait for a deal.
+  await a2.until(() => a2.view.hand.length >= 1, 'cards dealt again after reconnect');
   assert.ok(a2.view.hand.length >= 1);
   console.log('  ok  reconnect with token resumes the seat');
   a2.step();
