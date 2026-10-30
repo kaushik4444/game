@@ -753,7 +753,8 @@
       const cur = S.room && S.room.visibility;
       send({ t: 'setVisibility', visibility: cur === 'public' ? 'private' : 'public' });
     },
-    rejoin: (el) => askJoinMode(el.dataset.code, tableByCode(el.dataset.code)),
+    // The server decides: your old seat if you had one (a bot is playing it), otherwise a seat in a lobby, otherwise watching.
+    rejoin: (el) => joinTable(el.dataset.code, 'join'),
     joinPublic: (el) => askJoinMode(el.dataset.code, tableByCode(el.dataset.code)),
     toggleSessions: () => { S.sessionListOpen = !S.sessionListOpen; store.set('ct_sessions_open', S.sessionListOpen ? '1' : '0'); render(); },
     leave: () => send({ t: 'leave' }),

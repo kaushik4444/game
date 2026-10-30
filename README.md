@@ -47,6 +47,10 @@ Tableverse uses PostgreSQL (Neon, Supabase, or self-hosted) for persistent playe
 - **Sessions in progress**: the home screen lists active public tables. Join a lobby with an open seat, see `Full` when all seats are occupied, or spectate it once play has begun. Empty/disconnected tables expire automatically: rooms with no connected human players are removed after 10 minutes; otherwise inactive lobbies expire after 15 minutes and inactive games after 60 minutes.
 - **Private or public tables**: tables start Private by default. The host can switch a lobby between Private (invite code/link only) and Public (listed in Sessions in Progress) after inviting friends. Private tables never appear in the directory.
 
+- **Leaving and rejoining**: when a player leaves a running game a bot keeps their seat and everyone is told. Rejoining (from *Recent tables*, an invite link or the table code) always gives the seat back, even if the home screen only offered *Spectate*, and the bot stops playing. Everyone also sees when a player joins a lobby, loses connection (after 4 s) or reconnects.
+- **Host hand-over**: if the host leaves, or drops offline, the host role passes to the next player who is still there (in a lobby, a spectator takes over an empty table). The new host gets a 👑 notice and a chat line.
+- **Colours**: the Wizard card is royal purple and gold so it can no longer be confused with the blue suit, which is now a brighter blue.
+
 > Tables are discoverable to everyone currently using Tableverse. Do not put private information in table codes, player names, chat, or game logs.
 
 ## Multiplayer lifecycle

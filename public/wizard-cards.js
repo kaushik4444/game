@@ -119,13 +119,13 @@
   <!-- WIZARD (Z) - Archmage with Holy Chalice / Goblet (Original Ken Fisher / Amigo Card) -->
   <symbol id="wz-wizard" viewBox="0 0 100 130">
     <!-- Mountain and sky background of the original wizard card -->
-    <rect width="100" height="130" fill="#2c5282"/>
+    <rect width="100" height="130" fill="#4c1d95"/>
     <!-- Distant mountain peaks -->
-    <polygon points="0,75 30,48 55,70 80,45 100,68 100,130 0,130" fill="#1a365d"/>
-    <polygon points="0,85 24,68 45,86 75,64 100,82 100,130 0,130" fill="#0f2240"/>
+    <polygon points="0,75 30,48 55,70 80,45 100,68 100,130 0,130" fill="#3b1673"/>
+    <polygon points="0,85 24,68 45,86 75,64 100,82 100,130 0,130" fill="#220a47"/>
 
-    <!-- Archmage Robe (Royal blue with gold collar) -->
-    <path d="M10 130 C12 88 32 80 50 80 C68 80 88 88 90 130 Z" fill="#1e3a8a"/>
+    <!-- Archmage Robe (Royal purple with gold collar) -->
+    <path d="M10 130 C12 88 32 80 50 80 C68 80 88 88 90 130 Z" fill="#7e22ce"/>
     <path d="M30 80 L36 130 M70 80 L64 130" stroke="#f1c40f" stroke-width="2.5" fill="none"/>
     <polygon points="50,80 44,92 56,92" fill="#f1c40f"/>
 
@@ -144,8 +144,8 @@
 
     <!-- Raised Hands holding the Iconic Golden Chalice / Cup -->
     <!-- Sleeves -->
-    <path d="M22 130 C20 105 32 94 38 90" stroke="#1e3a8a" stroke-width="12" stroke-linecap="round" fill="none"/>
-    <path d="M78 130 C80 105 68 94 62 90" stroke="#1e3a8a" stroke-width="12" stroke-linecap="round" fill="none"/>
+    <path d="M22 130 C20 105 32 94 38 90" stroke="#7e22ce" stroke-width="12" stroke-linecap="round" fill="none"/>
+    <path d="M78 130 C80 105 68 94 62 90" stroke="#7e22ce" stroke-width="12" stroke-linecap="round" fill="none"/>
     <!-- Hands -->
     <circle cx="40" cy="88" r="5" fill="#f5c296"/>
     <circle cx="60" cy="88" r="5" fill="#f5c296"/>
@@ -155,8 +155,8 @@
       <!-- Cup Bowl -->
       <path d="M-12,-8 C-12,8 12,8 12,-8 Z" fill="url(#wz-chalice)" stroke="#b45309" stroke-width="1"/>
       <ellipse cx="0" cy="-8" rx="12" ry="3.5" fill="#fde68a" stroke="#b45309" stroke-width="1"/>
-      <!-- Glowing Blue Liquid Inside Chalice -->
-      <ellipse cx="0" cy="-8" rx="10" ry="2.6" fill="#38bdf8"/>
+      <!-- Glowing Magenta Liquid Inside Chalice -->
+      <ellipse cx="0" cy="-8" rx="10" ry="2.6" fill="#f0abfc"/>
       <!-- Chalice Stem & Foot -->
       <rect x="-2" y="8" width="4" height="12" fill="#b45309"/>
       <ellipse cx="0" cy="20" rx="9" ry="3.5" fill="url(#wz-chalice)" stroke="#b45309" stroke-width="1"/>

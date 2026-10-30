@@ -31,7 +31,7 @@
 .suit-R { --c: linear-gradient(160deg, #e85d5d, #b02a2a); }
 .suit-Y { --c: linear-gradient(160deg, #f6d04d, #d9a514); color: #3b2c00; }
 .suit-G { --c: linear-gradient(160deg, #3fae67, #1f7a43); }
-.suit-B { --c: linear-gradient(160deg, #4a7fe0, #2a4fa8); }
+.suit-B { --c: linear-gradient(160deg, #3d8bff, #1f5fd6); }
 .pill.suit-Y { color: #3b2c00; }
 .card {
   position: relative; flex: none; display: block; padding: 0; width: var(--cw); height: calc(var(--cw) * 1.45);
@@ -176,7 +176,7 @@ button.card { cursor: pointer; }
 .wc.suit-Y { --f: #854d0e; --e: #eab308; --tx: #facc15; }
 .wc.suit-G { --f: #065f46; --e: #10b981; --tx: #34d399; }
 .wc.suit-B { --f: #1e40af; --e: #3b82f6; --tx: #60a5fa; }
-.wc.wizard { --f: #1e3a8a; --e: #f1c40f; --tx: #ffeaa7; }
+.wc.wizard { --f: #6d28d9; --e: #f1c40f; --tx: #ffeaa7; } /* purple + gold: clearly apart from the blue suit */
 .wc.jester { --f: #064e3b; --e: #eab308; --tx: #84cc16; }
 
 .wc-in {

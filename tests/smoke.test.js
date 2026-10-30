@@ -287,6 +287,47 @@ function client(port, name, token) {
   tm.ws.close();
 
   // --- turn time limit: a bot plays for a human who does not act; "off" disables it
+  // --- leave / rejoin / host hand-over
+  const rj = await start({ port: 0, botDelay: [0, 3], autoAdvanceMs: 20, absentMs: 60000, trickPauseMs: 0, forcedMs: 0, dropGraceMs: 40, timeScale: 5, maxMsgsPerSec: Infinity });
+  const H = client(rj.port, 'Hana');
+  const J = client(rj.port, 'Jo');
+  const K = client(rj.port, 'Kit');
+  await Promise.all([H, J, K].map((c) => c.until(() => c.id, 'welcome ' + c.name)));
+  H.send({ t: 'create', gameId: 'wizard' });
+  await H.until(() => H.room, 'H table');
+  J.send({ t: 'join', code: H.room.code });
+  K.send({ t: 'join', code: H.room.code });
+  await K.until(() => K.room && K.room.members.length === 3, 'lobby of three');
+  await J.until(() => J.notices.some((x) => /Kit joined/.test(x)) || J.chats.some((m) => /Kit joined/.test(m.text)), 'join announced');
+  H.send({ t: 'leave' }); // the host leaves the lobby: the next player becomes host
+  await J.until(() => J.room.hostId === J.id && J.room.members.length === 2, 'host passed on in the lobby');
+  await J.until(() => J.chats.some((m) => /left the table/.test(m.text)) && J.chats.some((m) => /Jo is now the host/.test(m.text)) && J.notices.some((x) => /You are now the host/.test(x)), 'host change announced');
+  H.send({ t: 'join', code: J.room.code }); // Hana comes back as a normal player
+  await J.until(() => J.room.members.length === 3, 'Hana back in the lobby');
+  assert.equal(J.room.hostId, J.id);
+  J.send({ t: 'setOptions', options: { timeLimit: 'off' } });
+  J.send({ t: 'start' });
+  await K.until(() => K.view && K.room.status === 'playing', 'game started');
+  // a player leaves a running game: a bot takes the seat, everybody is told
+  K.send({ t: 'leave' });
+  await J.until(() => J.room.members.find((m) => m.name === 'Kit').bot, 'bot took Kit\'s seat');
+  await J.until(() => J.chats.some((m) => /Kit left the game/.test(m.text)) && J.notices.some((x) => /Kit left/.test(x)), 'leave announced');
+  // coming back through the home screen's "Spectate" button must still give the seat back
+  K.send({ t: 'join', code: J.room.code, spectate: true });
+  await K.until(() => K.view && K.view.me >= 0 && K.room.spectators.length === 0, 'Kit got the seat back, not a spectator');
+  assert.equal(K.room.members.find((m) => m.name === 'Kit').bot, false);
+  await J.until(() => J.chats.some((m) => /Kit is back/.test(m.text)) && J.notices.some((x) => /Kit rejoined/.test(x)), 'rejoin announced');
+  // the host drops while the game runs: others hear about it, then the host role moves to a connected player
+  J.ws.close();
+  await K.until(() => K.chats.some((m) => /Jo lost connection/.test(m.text)), 'lost connection announced');
+  await K.until(() => K.room.hostId === K.id || K.room.hostId === H.id, 'host moved to someone who is here');
+  const J2 = client(rj.port, 'Jo', J.token);
+  await J2.until(() => J2.room, 'Jo reconnected');
+  await K.until(() => K.chats.some((m) => /Jo reconnected/.test(m.text)), 'reconnect announced');
+  for (const c of [H, K, J2]) c.ws.close();
+  await rj.close();
+  console.log('  ok  leave, rejoin (never a spectator), reconnect notices and host hand-over');
+
   // --- ANNOUNCEMENT banner text is sent in the welcome message, cleaned and length-limited
   assert.equal(a.announcement, '');
   const ann = await start({ port: 0, announcement: '  Maintenance\n at 22:00 ' + 'x'.repeat(400) });

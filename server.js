@@ -51,6 +51,7 @@ function start(opts = {}) {
   const timeScale = opts.timeScale ?? 1; // tests shrink the turn time limit with this
   // Optional site-wide notice (set the ANNOUNCEMENT env var, or pass opts.announcement); shown as a dismissible banner on the home screen
   const announcement = cleanText(opts.announcement ?? process.env.ANNOUNCEMENT ?? '');
+  const dropGraceMs = opts.dropGraceMs ?? 4000; // a lost connection is announced to the table after this
   const forcedMs = opts.forcedMs ?? 700; // delay between automatic plays in the last trick of a round
 
   const players = new Map(); // id -> player
@@ -334,14 +335,37 @@ function start(opts = {}) {
       const p = players.get(m.id);
       if (p && p.room === room.code) {
         p.room = null;
-        if (isSpec(room, m.id)) send(p.ws, { t: 'left' });
+        clearTimeout(p.dropTimer);
+        if (p.connected) {
+          send(p.ws, { t: 'notice', text: 'This table was closed.' });
+          send(p.ws, { t: 'left' });
+        }
       }
     }
+  }
+
+  /**
+   * Make sure the table has a host who is actually here. If the host left or has been offline, the host role goes to the
+   * next seated human (connected ones first). Returns true when the host changed.
+   */
+  function ensureHost(room, { leaving } = {}) {
+    const cur = room.members.find((m) => m.id === room.hostId && !m.bot);
+    if (cur && cur.id !== leaving && isConnected(cur)) return false;
+    const cands = humans(room).filter((m) => m.id !== leaving);
+    const next = cands.find(isConnected) || (cur && cur.id !== leaving ? null : cands[0]);
+    if (!next || next.id === room.hostId) return false;
+    room.hostId = next.id;
+    sys(room, `👑 ${next.name} is now the host`);
+    const q = players.get(next.id);
+    if (q && q.connected) send(q.ws, { t: 'notice', text: '👑 You are now the host of this table' });
+    return true;
   }
 
   function leaveRoom(p) {
     const room = rooms.get(p.room);
     p.room = null;
+    clearTimeout(p.dropTimer);
+    p.dropAnnounced = false;
     if (!room) return;
     const si = room.spectators.findIndex((s) => s.id === p.id);
     if (si >= 0) {
@@ -351,14 +375,42 @@ function start(opts = {}) {
     }
     const i = room.members.findIndex((m) => m.id === p.id);
     if (i < 0) return;
+    const wasHost = room.hostId === p.id;
     if (room.status === 'playing') {
-      room.members[i].bot = true; // a bot takes over the seat
-      sys(room, `${p.name} left. A bot took over the seat.`);
-    } else room.members.splice(i, 1);
-    if (!humans(room).length) return destroyRoom(room);
-    if (room.hostId === p.id) room.hostId = humans(room)[0].id;
+      room.members[i].bot = true; // a bot takes over the seat; the player can take it back by rejoining
+      sys(room, `🚪 ${p.name} left the game. A bot took over the seat.`);
+    } else {
+      room.members.splice(i, 1);
+      sys(room, `🚪 ${p.name} left the table`);
+    }
+    notifyOthers(room, p.id, `🚪 ${p.name} left the table`);
+    if (!humans(room).length) {
+      // nobody left at the table: in a lobby a spectator can take over the empty table, otherwise it closes
+      const heir = room.status === 'lobby' && room.spectators[0];
+      if (!heir || !room.spectators.length) return destroyRoom(room);
+      room.spectators.shift();
+      room.members.push({ id: heir.id, name: heir.name, avatar: heir.avatar, bot: false });
+      room.hostId = heir.id;
+      sys(room, `👑 ${heir.name} took a seat and is now the host`);
+    } else if (wasHost) ensureHost(room, { leaving: p.id });
     broadcast(room);
     schedule(room);
+  }
+
+  /** A connection dropped: after a short grace period tell the table, and hand the host role on if needed. */
+  function onDrop(p) {
+    clearTimeout(p.dropTimer);
+    p.dropTimer = setTimeout(() => {
+      p.dropTimer = null;
+      if (p.connected) return;
+      const room = rooms.get(p.room);
+      if (!room || !room.members.some((m) => m.id === p.id && !m.bot)) return;
+      p.dropAnnounced = true;
+      sys(room, `📡 ${p.name} lost connection`);
+      if (room.hostId === p.id) ensureHost(room);
+      broadcast(room);
+    }, dropGraceMs);
+    if (p.dropTimer.unref) p.dropTimer.unref();
   }
 
   function addMember(room, p) {
@@ -452,15 +504,22 @@ function start(opts = {}) {
       const room = rooms.get(code);
       applyProfile(p, msg);
       if (!room) return sendError(p, `No table with code ${code || '?'}`);
-      if (p.room === code && (room.members.some((m) => m.id === p.id) || isSpec(room, p.id))) return broadcast(room);
+      const seat = room.members.find((m) => m.id === p.id);
+      if (p.room === code && ((seat && !seat.bot) || isSpec(room, p.id))) return broadcast(room);
       const wantsSpectate = msg.spectate === true;
       // Came back to a running game they left (a bot kept their seat): take the seat back, same player id.
-      const seat = room.members.find((m) => m.id === p.id);
-      if (seat && room.status === 'playing' && seat.bot && !wantsSpectate) {
-        if (p.room) leaveRoom(p);
+      // This wins over "spectate": the home screen can only offer Spectate for a running game, and a player who
+      // owns a seat must never be turned into a spectator while a bot plays their cards.
+      if (seat && room.status === 'playing' && seat.bot) {
+        if (p.room && p.room !== room.code) leaveRoom(p);
+        const si = room.spectators.findIndex((s) => s.id === p.id);
+        if (si >= 0) room.spectators.splice(si, 1);
         seat.bot = false;
+        seat.avatar = p.avatar;
         p.room = room.code;
-        sys(room, `${p.name} is back and took the seat from the bot`);
+        sys(room, `🔄 ${p.name} is back and took the seat from the bot`);
+        notifyOthers(room, p.id, `🔄 ${p.name} rejoined the game`);
+        ensureHost(room);
         broadcast(room);
         sendChatLog(p, room);
         schedule(room);
@@ -490,6 +549,8 @@ function start(opts = {}) {
       if (room.members.length >= room.seats) return sendError(p, 'That table is full');
       if (p.room) leaveRoom(p);
       addMember(room, p);
+      sys(room, `🙋 ${p.name} joined the table`);
+      notifyOthers(room, p.id, `🙋 ${p.name} joined the table`);
       broadcast(room);
       sendChatLog(p, room);
     },
@@ -635,7 +696,15 @@ function start(opts = {}) {
   // ------------------------------------------------------------ websocket
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 8 * 1024 });
 
-  async function onHello(ws, msg) {
+  let helloQueue = Promise.resolve(); // hellos are handled one at a time so a token can never get two player objects
+  const onHello = (ws, msg) => {
+    const run = helloQueue.then(() => handleHello(ws, msg));
+    helloQueue = run.catch(() => {});
+    return run;
+  };
+
+  async function handleHello(ws, msg) {
+    if (ws.readyState !== 1) return; // the socket closed while waiting in the queue
     let p = typeof msg.token === 'string' ? tokens.get(msg.token) : null;
     let bearerToken = msg.token;
 
@@ -688,8 +757,14 @@ function start(opts = {}) {
     ws.player = p;
     applyProfile(p, msg);
     send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables(), announcement });
+    clearTimeout(p.dropTimer);
     const room = rooms.get(p.room);
     if (room) {
+      if (p.dropAnnounced) {
+        p.dropAnnounced = false;
+        sys(room, `📶 ${p.name} reconnected`);
+        notifyOthers(room, p.id, `📶 ${p.name} reconnected`);
+      }
       broadcast(room);
       sendChatLog(p, room);
       schedule(room);
@@ -737,6 +812,7 @@ function start(opts = {}) {
       if (room) {
         broadcast(room);
         schedule(room);
+        onDrop(p);
       }
     });
     ws.on('error', () => {});
@@ -802,12 +878,12 @@ function start(opts = {}) {
     return new Promise((resolve) => wss.close(() => server.close(() => resolve())));
   }
 
-  // Run pending database migrations automatically if DATABASE_URL is configured
-  if (dbPool.hasDatabase()) {
-    migrate().catch((err) => console.error('[server] Startup migration warning:', err.message));
-  }
+  // Run pending database migrations before accepting players, so the first visitor never meets missing tables
+  const migrated = dbPool.hasDatabase()
+    ? migrate().catch((err) => console.error('[server] Startup migration warning:', err.message))
+    : Promise.resolve();
 
-  return new Promise((resolve) => server.listen(port, () => resolve({ server, port: server.address().port, close })));
+  return migrated.then(() => new Promise((resolve) => server.listen(port, () => resolve({ server, port: server.address().port, close }))));
 }
 
 module.exports = { start };

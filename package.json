@@ -1,6 +1,6 @@
 {
   "name": "tableverse",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Tableverse \u2014 Your friends. Your games. One table.",
   "main": "server.js",
   "scripts": {
