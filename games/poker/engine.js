@@ -128,6 +128,7 @@ function createGame(players, options, rng) {
     board: [],
     deck: [],
     currentBet: 0,
+    log: [],
     minRaise: 0,
     turn: -1,
     sb: -1,
@@ -208,6 +209,8 @@ function startHand(g) {
   put(g.players[bbIdx], bbAmt);
   g.players[sbIdx].last = `Small blind ${g.players[sbIdx].bet}`;
   g.players[bbIdx].last = `Big blind ${g.players[bbIdx].bet}`;
+  g.log.push({ by: g.players[sbIdx].name, card: `posts small blind ${g.players[sbIdx].bet}`, kind: 'blind' });
+  g.log.push({ by: g.players[bbIdx].name, card: `posts big blind ${g.players[bbIdx].bet}`, kind: 'blind' });
   g.currentBet = Math.max(g.players[sbIdx].bet, g.players[bbIdx].bet);
   g.minRaise = bbAmt;
   const first = inHand === 2 ? sbIdx : nextIdx(g, bbIdx, (p) => p.inHand);
@@ -388,15 +391,18 @@ function applyAction(g, playerId, action) {
     case 'fold':
       p.folded = true;
       p.last = 'Fold';
+      g.log.push({ by: p.name, card: 'folds', kind: 'fold' });
       break;
     case 'check':
       if (toCall > 0) return fail('You cannot check, there is a bet to call');
       p.last = 'Check';
+      g.log.push({ by: p.name, card: 'checks', kind: 'check' });
       break;
     case 'call': {
       if (toCall <= 0) return fail('Nothing to call');
       const a = put(p, toCall);
       p.last = p.allIn ? `All-in ${p.bet}` : `Call ${a}`;
+      g.log.push({ by: p.name, card: p.allIn ? `all-in ${p.bet}` : `calls ${a}`, kind: 'bet' });
       break;
     }
     case 'allin':
@@ -425,6 +431,7 @@ function applyAction(g, playerId, action) {
       }
       g.currentBet = p.bet;
       p.last = p.allIn ? `All-in ${p.bet}` : opening ? `Bet ${p.bet}` : `Raise to ${p.bet}`;
+      g.log.push({ by: p.name, card: p.last, kind: 'bet' });
       break;
     }
     default:
@@ -488,6 +495,7 @@ function viewFor(g, playerId) {
     })),
     result: g.result,
     history: g.history.slice(-12),
+    log: g.log.slice(-20),
     standings: g.standings,
     options: g.options,
   };

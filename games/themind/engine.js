@@ -71,6 +71,7 @@ function createGame(players, options, rng) {
     version: 0, // bumped on every state change (bots use it to cache their timing)
     stats: { mistakes: 0, starsUsed: 0, cleared: 0 },
     finalHands: null,
+    log: [],
   };
   return g;
 }
@@ -141,6 +142,7 @@ function checkStar(g) {
     g.discarded.push({ card, player: i, why: 'star' });
   }
   discards.sort((a, b) => a.card - b.card);
+  for (const d of discards) g.log.push({ by: g.players[d.player].name, card: `discarded ${d.card} (star)`, kind: 'star' });
   g.votes = new Set();
   emit(g, { type: 'star', discards });
   finishLevelIfDone(g);
@@ -166,12 +168,14 @@ function playLowest(g, who, expect) {
     lost.sort((a, b) => a.card - b.card);
     g.lives--;
     g.stats.mistakes++;
+    g.log.push({ by: g.players[who].name, card: `played ${card} too early`, kind: 'mistake' });
     emit(g, { type: 'mistake', by: who, card, discards: lost, lives: g.lives });
     if (g.lives <= 0) {
       lose(g);
       return { ok: true };
     }
   } else {
+    g.log.push({ by: g.players[who].name, card: `played ${card}`, kind: 'play' });
     emit(g, { type: 'play', by: who, card });
   }
   finishLevelIfDone(g);
@@ -289,6 +293,7 @@ function viewFor(g, playerId) {
     clearedBonus: g.phase === 'levelEnd' && g.event && g.event.type === 'cleared' ? g.event.bonus : null,
     upcomingBonus: bonusFor(nextLevel, g.options, g.maxLevel),
     stats: Object.assign({}, g.stats),
+    log: g.log ? g.log.slice(-20) : [],
     finalHands: over && g.finalHands ? g.finalHands.map((h) => h.slice()) : null,
     myTurn: !over && me >= 0 && ((g.phase === 'playing' && hand.length > 0) || needsReady),
     winners: over && g.won ? g.players.map((p) => p.id) : [],

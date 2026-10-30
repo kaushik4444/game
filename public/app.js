@@ -31,6 +31,10 @@
     unread: 0,
     skew: 0, // server clock minus this device's clock, for the turn countdown
     dismissedWhatsNew: store.get('ct_wn') === '1',
+    recentTables: (() => { try { return JSON.parse(store.get('ct_recent') || '[]'); } catch { return []; } })(),
+    publicTables: [],
+    createVisibility: 'private',
+    sessionListOpen: store.get('ct_sessions_open') !== '0',
   };
   const plugins = {};
   let ws = null;
@@ -119,12 +123,42 @@
     try { history.replaceState(null, '', code ? '#' + code : location.pathname + location.search); } catch { /* ignore */ }
   };
 
+  function rememberTable(room) {
+    if (!room || !room.code || !room.gameId) return;
+    const item = { code: room.code, gameId: room.gameId, name: (gameMeta(room.gameId) || {}).name || room.gameId, at: Date.now() };
+    S.recentTables = [item, ...S.recentTables.filter((x) => x.code !== item.code)].slice(0, 5);
+    store.set('ct_recent', JSON.stringify(S.recentTables));
+  }
+
+  function recentTablesHTML() {
+    if (!S.recentTables.length) return '';
+    const rows = S.recentTables.map((r) => `<button class="recent-table" data-act="rejoin" data-code="${esc(r.code)}"><span>↺</span><b>${esc(r.name)}</b><code>${esc(r.code)}</code></button>`).join('');
+    return `<section class="panel recent-panel"><div class="panel-tag">RECENT TABLES</div><div class="recent-tables">${rows}</div></section>`;
+  }
+
+  function publicTablesHTML() {
+    const count = S.publicTables.length;
+    const rows = S.publicTables.map((t) => {
+      const g = gameMeta(t.gameId) || { name: t.gameId, icon: '🎴' };
+      const started = t.status === 'playing';
+      return `<div class="public-table"><span class="public-game-icon">${esc(g.icon || '🎴')}</span><div class="public-table-info"><b>${esc(g.name)}</b><span>${esc(t.host)}'s table · ${t.members}/${t.seats} players${t.spectators ? ` · 👁 ${t.spectators}` : ''}</span></div><button class="btn ${started ? 'ghost' : ''} small" data-act="joinPublic" data-code="${esc(t.code)}">${started ? 'Spectate' : 'Join'}</button></div>`;
+    }).join('');
+    return `<section class="panel public-tables-panel"><div class="row" style="justify-content:space-between"><div><div class="panel-tag">SESSIONS IN PROGRESS <span class="session-count">${count}</span></div><p class="public-help">Open lobbies can be joined; active games can be watched.</p></div><button class="btn ghost small" data-act="toggleSessions" aria-expanded="${S.sessionListOpen}">${S.sessionListOpen ? 'Hide' : 'Show'}</button></div>${S.sessionListOpen ? count ? `<div class="public-tables">${rows}</div>` : '<p class="hint">No active tables right now. Start one and invite friends!</p>' : ''}</section>`;
+  }
+
+  function joinTable(code) {
+    if (!S.named || !S.name) return toast('Choose your player name first');
+    send({ t: 'join', code, name: S.name, avatar: S.avatar || undefined });
+  }
+
+
   function onMessage(m) {
     switch (m.t) {
       case 'welcome': {
         S.id = m.id;
         S.token = m.token;
         S.games = m.games;
+        S.publicTables = m.tables || [];
         S.avatars = m.avatars || [];
         S.emotes = m.emotes || [];
         if (!S.name) S.name = m.name;
@@ -139,6 +173,10 @@
         render();
         break;
       }
+      case 'tables':
+        S.publicTables = m.tables || [];
+        if (!S.room) render();
+        break;
       case 'emote':
         showEmote(m.id, m.e);
         CardTable.sound.play('emote');
@@ -158,6 +196,7 @@
       case 'state': {
         S.room = m.room;
         S.view = m.view;
+        rememberTable(m.room);
         S.invite = '';
         S.skew = (m.room.now || Date.now()) - Date.now();
         setHash(m.room.code);
@@ -472,19 +511,22 @@
           <div class="join-tips">💡 Anyone can also join via direct link: <code>site/#CODE</code></div>
         </section>
       </div>
+      ${publicTablesHTML()}
+      ${recentTablesHTML()}
       <div class="section-head">
         <h2 class="section">Featured Games</h2>
         <span class="section-sub">Pick a card game and host a private table for your friends</span>
       </div>
       <section class="game-grid">${tiles}</section>
       <a class="panel tool-tile" href="/scorecard.html"><span class="tool-ico">📝</span><span><b>Wizard scorecard</b><br><small>Playing with a real deck? Enter bids and tricks each round and the scores are worked out for you. Works offline.</small></span></a>
-      <div class="roadmap-box panel">
-        <span class="roadmap-icon">🧭</span>
-        <div>
-          <b>More arena games coming soon:</b>
-          <p>Saboteur is actively in development!</p>
+      <section class="roadmap-box panel">
+        <div class="roadmap-head"><span class="roadmap-icon">🧭</span><div><b>More arena games coming soon</b><p>New ways to play with friends are on the way.</p></div></div>
+        <div class="upcoming-games">
+          <div class="upcoming-game"><span>⛏️</span><b>Saboteur</b><small>Hidden roles &amp; tunnel strategy</small><em>In development</em></div>
+          <div class="upcoming-game"><span>🐂</span><b>6 nimmt!</b><small>Take rows, avoid the bullheads</small><em>Coming next</em></div>
+          <div class="upcoming-game"><span>🌈</span><b>UNO</b><small>Classic colour-changing card battles</small><em>Coming next</em></div>
         </div>
-      </div>
+      </section>
     </main>`;
   }
 
@@ -569,6 +611,15 @@
     </main>`;
   }
 
+  function openActivityLog() {
+    const entries = (S.view && S.view.log) || [];
+    const overlay = document.createElement('div');
+    overlay.className = 'overlay activity-overlay';
+    overlay.innerHTML = `<div class="sheet activity-sheet" data-stop="1"><div class="row" style="justify-content:space-between"><h2>Game log</h2><button class="btn ghost small" data-log-close>Close</button></div>${entries.length ? `<ol class="activity-list">${entries.slice(-60).reverse().map((e) => `<li><b>${esc(e.by || 'System')}</b> <span>${esc(e.card || e.text || '')}</span></li>`).join('')}</ol>` : '<p class="hint">No plays yet.</p>'}</div>`;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay || e.target.closest('[data-log-close]')) overlay.remove(); });
+    document.body.appendChild(overlay);
+  }
+
   function renderGame() {
     const plugin = plugins[S.room.gameId];
     if (!plugin || !S.view) {
@@ -579,6 +630,7 @@
       room: S.room,
       game: gameMeta(S.room.gameId),
       isHost: S.room.hostId === S.id,
+      activityLog: () => openActivityLog(),
       act: (action) => send({ t: 'act', action }),
       leave: () => {
         const playing = S.room.status === 'playing' && !isSpectator();
@@ -589,6 +641,15 @@
       rerender: render,
       toast,
     });
+    const top = $app.querySelector('.wz-top');
+    if (top) top.querySelector('.row')?.insertAdjacentHTML('afterbegin', '<button class="btn ghost small" data-act="activityLog" aria-label="Open game log">📜 Log</button>');
+    const log = (S.view.log || []).slice(-12).reverse();
+    if (log.length) {
+      const details = document.createElement('details');
+      details.className = 'game-log-inline';
+      details.innerHTML = `<summary>📜 Game log <span>${S.view.log.length} plays</span></summary><ol>${log.map((e) => `<li><b>${esc(e.by || 'System')}</b><span>${esc(e.card || e.text || '')}</span></li>`).join('')}</ol>`;
+      $app.querySelector('.wz')?.appendChild(details);
+    }
     const bar = $app.querySelector('.wz-status');
     if (bar) bar.insertAdjacentHTML('beforeend', '<span class="ct-timer" hidden></span>');
     updateTimer();
@@ -603,6 +664,7 @@
       render();
     },
     emotes: () => toggleEmoteBar(),
+    activityLog: () => openActivityLog(),
     sound: () => { CardTable.sound.toggle(); render(); },
     joinInvite: () => {
       if (!S.named || !S.name) return toast('Please type your name first');
@@ -614,7 +676,24 @@
       setHash('');
       render();
     },
-    create: (el) => send({ t: 'create', gameId: el.dataset.game, name: S.name || undefined, avatar: S.avatar || undefined }),
+    create: (el) => {
+      const game = el.dataset.game;
+      const overlay = document.createElement('div');
+      overlay.className = 'overlay';
+      overlay.innerHTML = `<div class="sheet create-sheet" data-stop="1"><h2>Open a ${esc((gameMeta(game) || {}).name || 'game')} table</h2><p class="hint">Choose who can discover this table.</p><div class="visibility-options"><label class="visibility-option"><input type="radio" name="table-visibility" value="private" checked><span><b>🔒 Private</b><small>Only people with the invite code or link can join.</small></span></label><label class="visibility-option"><input type="radio" name="table-visibility" value="public"><span><b>🌐 Public</b><small>Listed on the home screen so anyone can join the lobby or spectate the game.</small></span></label></div><div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn ghost small" data-create-cancel>Cancel</button><button class="btn small" data-create-confirm>Create table</button></div></div>`;
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay || e.target.closest('[data-create-cancel]')) return overlay.remove();
+        if (e.target.closest('[data-create-confirm]')) {
+          const visibility = overlay.querySelector('input[name="table-visibility"]:checked')?.value || 'private';
+          overlay.remove();
+          send({ t: 'create', gameId: game, visibility, name: S.name || undefined, avatar: S.avatar || undefined });
+        }
+      });
+      document.body.appendChild(overlay);
+    },
+    rejoin: (el) => joinTable(el.dataset.code),
+    joinPublic: (el) => joinTable(el.dataset.code),
+    toggleSessions: () => { S.sessionListOpen = !S.sessionListOpen; store.set('ct_sessions_open', S.sessionListOpen ? '1' : '0'); render(); },
     leave: () => send({ t: 'leave' }),
     chat: () => (S.chatOpen ? closeChat() : openChat()),
     sit: () => send({ t: 'sit' }),

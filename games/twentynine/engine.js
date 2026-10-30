@@ -57,6 +57,7 @@ function createGame(playerList, options = {}, rng = Math.random) {
     teamScore: [0, 0],
     history: [],
     phase: 'bidding',
+    log: [],
   };
   startHand(g);
   return g;
@@ -149,12 +150,14 @@ function applyAction(g, playerId, action) {
       if (action.pass === true) {
         if (!canPass(g)) return fail('Everyone passed, so you must bid');
         g.bids[seat] = 'pass';
+        g.log.push({ by: g.players[seat].name, card: 'passes', kind: 'bid' });
       } else {
         const amt = action.amount;
         if (!Number.isInteger(amt) || amt < minBid(g) || amt > MAX_BID) return fail(`Bid between ${minBid(g)} and ${MAX_BID}`);
         g.bids[seat] = amt;
         g.highBid = amt;
         g.highBidder = seat;
+        g.log.push({ by: g.players[seat].name, card: `bids ${amt}`, kind: 'bid' });
       }
       if (g.highBid === MAX_BID || g.bids.every((b) => b !== null)) {
         g.phase = 'chooseTrump';
@@ -188,6 +191,7 @@ function applyAction(g, playerId, action) {
       if (!legalCards(g, seat).includes(hand[ci])) return fail(g.revealer === seat ? 'You must play a trump card' : 'You must follow suit');
       const [card] = hand.splice(ci, 1);
       g.trick.push({ player: seat, card, trump: g.trumpRevealed && card.suit === g.trumpSuit });
+      g.log.push({ by: g.players[seat].name, card: card.suit + card.rank, kind: 'play' });
       g.revealer = -1;
       if (g.trick.length < 4) {
         g.turn = (g.turn + 1) % 4;
@@ -254,6 +258,7 @@ function viewFor(g, playerId) {
     handPoints: g.handPoints,
     teamScore: g.teamScore,
     history: g.history,
+    log: g.log.slice(-60),
     winnerTeam: g.winnerTeam === undefined ? null : g.winnerTeam,
   };
 }

@@ -32,6 +32,13 @@ function sortHand(hand) {
   return hand.sort((a, b) => key(a) - key(b) || a.id.localeCompare(b.id));
 }
 
+function cardName(c) {
+  if (c.type === 'wizard') return 'Wizard';
+  if (c.type === 'jester') return 'Jester';
+  const names = { R: 'Red', Y: 'Yellow', G: 'Green', B: 'Blue' };
+  return `${names[c.suit]} ${c.rank}`;
+}
+
 /** Suit that must be followed, or null if there is none (empty trick, wizard led, only jesters so far). */
 function ledSuit(trick) {
   for (const t of trick) {
@@ -91,6 +98,7 @@ function createGame(playerList, options = {}, rng = Math.random) {
     trick: [],
     lastTrick: null,
     history: [],
+    log: [], // public play-by-play log: [{ by, card, kind, when }]
   };
   startRound(g);
   return g;
@@ -164,6 +172,7 @@ function applyAction(g, playerId, action) {
       if (!Number.isInteger(amt) || amt < 0 || amt > g.round) return fail('Invalid bid');
       if (!simul && amt === forbiddenBid(g)) return fail(`The dealer cannot bid ${amt}`);
       g.players[idx].bid = amt;
+      g.log.push({ by: g.players[idx].name, card: `bids ${amt}`, kind: 'bid' });
       if (g.players.every((p) => p.bid !== null)) {
         g.phase = 'playing';
         g.turn = (g.dealer + 1) % g.n;
@@ -180,6 +189,7 @@ function applyAction(g, playerId, action) {
       if (!legalCards(p.hand, g.trick).includes(p.hand[ci])) return fail('You must follow suit');
       const [card] = p.hand.splice(ci, 1);
       g.trick.push({ player: idx, card });
+      g.log.push({ by: g.players[idx].name, card: cardName(card), kind: 'play' });
       if (g.trick.length === g.n) {
         const winner = trickWinner(g.trick, g.trumpSuit);
         g.players[winner].tricks++;
@@ -264,6 +274,7 @@ function viewFor(g, playerId) {
     lastTrick: g.lastTrick,
     hand,
     legal,
+    log: g.log.slice(-60),
     foresight: others,
     forbiddenBid: bidding && !simul && me === g.turn ? forbiddenBid(g) : null,
     players: g.players.map((p, i) => ({

@@ -111,6 +111,7 @@ function start(opts = {}) {
       hostId: room.hostId,
       status: room.status,
       options: room.options,
+      visibility: room.visibility,
       seats: room.seats,
       min: def.seats.min,
       max: def.seats.max,
@@ -122,12 +123,33 @@ function start(opts = {}) {
     };
   }
 
+  function publicTables() {
+    return [...rooms.values()]
+      .filter((room) => room.visibility === 'public' && (room.status === 'lobby' || room.status === 'playing'))
+      .map((room) => ({
+        code: room.code,
+        gameId: room.gameId,
+        status: room.status,
+        seats: room.seats,
+        members: room.members.filter((m) => !m.bot).length,
+        host: room.members.find((m) => m.id === room.hostId)?.name || 'Host',
+        spectators: room.spectators.length,
+      }));
+  }
+
+  function broadcastTables() {
+    const message = { t: 'tables', tables: publicTables() };
+    for (const p of players.values()) if (p.connected) send(p.ws, message);
+  }
+
   function broadcast(room) {
+    room.lastActivity = Date.now();
     const info = roomInfo(room);
     for (const m of viewers(room)) {
       const p = players.get(m.id);
       if (p && p.connected) send(p.ws, { t: 'state', room: info, view: room.game ? room.game.view(m.id) : null });
     }
+    broadcastTables();
   }
 
   // ------------------------------------------------------------ chat
@@ -272,6 +294,7 @@ function start(opts = {}) {
   function destroyRoom(room) {
     clearTimeout(room.timer);
     rooms.delete(room.code);
+    broadcastTables();
     for (const m of viewers(room)) {
       const p = players.get(m.id);
       if (p && p.room === room.code) {
@@ -363,7 +386,11 @@ function start(opts = {}) {
       if (p.room) leaveRoom(p);
       const room = {
         code: newCode(),
+        createdAt: Date.now(),
+        lastActivity: Date.now(),
+        idleSince: null,
         gameId: def.id,
+        visibility: msg.visibility === 'public' ? 'public' : 'private',
         hostId: p.id,
         status: 'lobby',
         seats: def.seats.default,
@@ -566,7 +593,7 @@ function start(opts = {}) {
     p.connected = true;
     ws.player = p;
     applyProfile(p, msg);
-    send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list() });
+    send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables() });
     const room = rooms.get(p.room);
     if (room) {
       broadcast(room);
@@ -632,9 +659,18 @@ function start(opts = {}) {
   const gc = setInterval(() => {
     const now = Date.now();
     for (const room of rooms.values()) {
-      if (humans(room).some(isConnected)) room.idleSince = null;
-      else if (!room.idleSince) room.idleSince = now;
-      else if (now - room.idleSince > 10 * 60 * 1000) {
+      const hasConnectedHuman = humans(room).some(isConnected);
+      if (hasConnectedHuman) {
+        room.idleSince = null;
+      } else if (!room.idleSince) {
+        room.idleSince = now;
+      } else if (now - room.idleSince > 10 * 60 * 1000) {
+        destroyRoom(room);
+        continue;
+      }
+      // Abandoned lobbies are short lived; a stalled game gets a longer grace period.
+      const idleLimit = room.status === 'lobby' ? 15 * 60 * 1000 : 60 * 60 * 1000;
+      if (now - (room.lastActivity || room.createdAt || now) > idleLimit) {
         destroyRoom(room);
         continue;
       }

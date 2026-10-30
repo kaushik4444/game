@@ -50,6 +50,48 @@ input[type=text] {
 }
 input[type=text]:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(255, 201, 77, .2); }
 input[type=text]:focus-visible, .btn:focus-visible, button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.public-tables-panel { margin: 16px 0 12px; }
+.session-count { display: inline-grid; place-items: center; min-width: 20px; height: 20px; margin-left: 4px; padding: 0 5px; border-radius: 999px; background: var(--gold); color: var(--gold-ink); font-size: 11px; letter-spacing: 0; }
+.public-help { margin: 5px 0 0; color: var(--muted); font-size: 13px; }
+.public-tables { display: grid; gap: 8px; margin-top: 10px; }
+.public-table { display: flex; align-items: center; gap: 11px; padding: 10px 12px; border: 1px solid var(--panel-line); border-radius: 13px; background: rgba(255,255,255,.035); }
+.public-game-icon { font-size: 25px; width: 34px; text-align: center; }
+.public-table-info { display: grid; gap: 3px; flex: 1; min-width: 0; }
+.public-table-info b { font-size: 15px; }
+.public-table-info span { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.recent-panel { margin: 16px 0 22px; }
+.recent-tables { display: flex; gap: 9px; flex-wrap: wrap; margin-top: 10px; }
+.recent-table { display: flex; align-items: center; gap: 8px; border: 1px solid var(--panel-line); border-radius: 12px; background: rgba(255,255,255,.04); color: var(--ink); padding: 9px 12px; text-align: left; }
+.recent-table:hover { background: rgba(255,255,255,.1); }
+.recent-table span { color: var(--gold); font-size: 18px; }
+.recent-table code { color: var(--muted); font-size: 11px; margin-left: 4px; }
+.create-sheet { width: min(500px, calc(100vw - 28px)); }
+.visibility-options { display: grid; gap: 10px; margin-top: 14px; }
+.visibility-option { display: flex; gap: 11px; align-items: flex-start; padding: 13px; border: 1px solid var(--panel-line); border-radius: 13px; background: rgba(255,255,255,.035); cursor: pointer; text-align: left; }
+.visibility-option:has(input:checked) { border-color: var(--gold); background: rgba(255,201,77,.1); }
+.visibility-option input { margin-top: 3px; accent-color: var(--gold); }
+.visibility-option span { display: grid; gap: 4px; }
+.visibility-option small { color: var(--muted); line-height: 1.4; }
+.activity-sheet { width: min(560px, calc(100vw - 28px)); max-height: min(75vh, 680px); overflow: auto; }
+.activity-list { list-style: none; padding: 0; margin: 14px 0 0; text-align: left; }
+.activity-list li { display: flex; gap: 8px; align-items: baseline; padding: 9px 0; border-bottom: 1px solid var(--panel-line); font-size: 14px; }
+.activity-list li b { color: var(--gold); white-space: nowrap; }
+.activity-list li span { color: var(--ink); }
+.roadmap-head { display: flex; align-items: center; gap: 12px; }
+.upcoming-games { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }
+.upcoming-game { display: grid; gap: 3px; padding: 13px; border: 1px solid var(--panel-line); border-radius: 14px; background: rgba(255,255,255,.035); }
+.upcoming-game > span { font-size: 27px; }
+.upcoming-game b { font-size: 15px; }
+.upcoming-game small { color: var(--muted); line-height: 1.35; }
+.upcoming-game em { color: var(--gold); font-size: 11px; font-style: normal; text-transform: uppercase; letter-spacing: .06em; margin-top: 5px; }
+.game-log-inline { width: min(900px, calc(100% - 24px)); margin: 12px auto 0; border: 1px solid var(--panel-line); border-radius: 14px; background: rgba(0,0,0,.14); text-align: left; overflow: hidden; }
+.game-log-inline summary { padding: 11px 14px; cursor: pointer; color: var(--ink); font-weight: 700; }
+.game-log-inline summary span { color: var(--muted); font-size: 12px; font-weight: 500; margin-left: 4px; }
+.game-log-inline ol { list-style: none; padding: 0 14px 10px; margin: 0; max-height: 210px; overflow: auto; }
+.game-log-inline li { display: flex; gap: 8px; padding: 6px 0; font-size: 13px; border-top: 1px solid rgba(255,255,255,.05); }
+.game-log-inline li b { color: var(--gold); font-weight: 700; }
+.game-log-inline li span { color: var(--ink); }
+@media (max-width: 600px) { .upcoming-games { grid-template-columns: 1fr; } .upcoming-game { grid-template-columns: auto 1fr; align-items: center; } .upcoming-game > span { grid-row: span 2; } .upcoming-game small, .upcoming-game em { grid-column: 2; } }
 .panel {
   background: linear-gradient(160deg, rgba(255, 255, 255, .09), rgba(255, 255, 255, .03));
   border: 1px solid var(--panel-line); border-radius: 20px; padding: 18px;

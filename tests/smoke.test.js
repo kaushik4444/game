@@ -22,7 +22,7 @@ function get(port, path) {
 
 /** Minimal client with a naive-but-legal strategy. */
 function client(port, name, token) {
-  const c = { name, last: null, room: null, view: null, errors: [], chats: [], notices: [], ws: new WebSocket(`ws://127.0.0.1:${port}/ws`), playing: false };
+  const c = { name, last: null, room: null, view: null, errors: [], chats: [], notices: [], tables: [], ws: new WebSocket(`ws://127.0.0.1:${port}/ws`), playing: false };
   c.send = (m) => c.ws.send(JSON.stringify(m));
   c.waiters = [];
   c.until = (pred, label) =>
@@ -42,6 +42,7 @@ function client(port, name, token) {
     if (m.t === 'error') c.errors.push(m.message);
     if (m.t === 'chat') c.chats.push(m.m);
     if (m.t === 'notice') c.notices.push(m.text);
+    if (m.t === 'tables') c.tables = m.tables;
     c.waiters = c.waiters.filter((w) => !w());
   });
   c.step = () => {
@@ -80,13 +81,24 @@ function client(port, name, token) {
   const a = client(port, 'Alice');
   await a.until(() => a.id, 'welcome');
   assert.equal(a.games[0].id, 'wizard');
-  a.send({ t: 'create', gameId: 'wizard' });
+  a.send({ t: 'create', gameId: 'wizard', visibility: 'public' });
   await a.until(() => a.room, 'room created');
   assert.match(a.room.code, /^[A-HJ-NP-Z]{4}$/);
   assert.equal(a.room.hostId, a.id);
 
   const b = client(port, 'Bob');
   await b.until(() => b.id, 'welcome B');
+  await b.until(() => b.tables.some((t) => t.code === a.room.code && t.status === 'lobby'), 'public lobby listing');
+  assert.equal(b.tables.find((t) => t.code === a.room.code).members, 1);
+
+  const privateHost = client(port, 'Private Host');
+  await privateHost.until(() => privateHost.id, 'welcome private host');
+  privateHost.send({ t: 'create', gameId: 'wizard' });
+  await privateHost.until(() => privateHost.room, 'private room created');
+  assert.equal(privateHost.room.visibility, 'private');
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(b.tables.some((t) => t.code === privateHost.room.code), false);
+  privateHost.close();
   b.send({ t: 'join', code: 'ZZZZ' });
   await b.until(() => b.errors.length, 'error for bad code');
   b.send({ t: 'join', code: a.room.code.toLowerCase() });
@@ -165,6 +177,7 @@ function client(port, name, token) {
   await b.until(() => b.view.phase === 'gameOver', 'game over');
   await a2.until(() => a2.view.phase === 'gameOver', 'game over A');
   assert.equal(b.view.history.length, 20);
+  assert.ok(b.view.log.length > 0, 'Wizard exposes a public activity log');
   assert.equal(b.room.status, 'finished');
   assert.ok(b.view.winners.length >= 1);
   console.log('  ok  full 3-player game (20 rounds) with a bot, ending in gameOver');
@@ -226,6 +239,7 @@ function client(port, name, token) {
   await pk.until(() => pk.view && pk.view.game === 'poker', 'poker started');
   assert.equal(pk.view.hand.length, 2);
   assert.equal(pk.view.players.length, 4);
+  assert.ok(pk.view.log.length >= 2, 'Poker exposes blind activity');
   let lastKey = '';
   pk.playing = false;
   const pkStep = () => {
@@ -258,6 +272,7 @@ function client(port, name, token) {
   assert.equal(tm.view.hand.length, 1);
   assert.deepEqual(tm.view.players.map((p) => p.cards), [1, 1, 1]);
   assert.equal(tm.room.deadline, null, 'no turn clock in a real-time game');
+  assert.ok(tm.view.log.length >= 0, 'The Mind exposes a public activity log');
   console.log('  ok  the mind: create, bots ready up, level dealt');
   tm.send({ t: 'leave' });
   tm.ws.close();
