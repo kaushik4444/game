@@ -451,8 +451,8 @@
       <div class="whats-new panel">
         <span class="wn-icon">🎉</span>
         <div class="wn-content">
-          <b>What's New in Card Table Arena (Updated Today)</b>
-          Authentic Ken Fisher Wizard cards with gorgeous runes & Z/N ranks, softer tactile card sound effects, auto-clearing tricks with winner lead prompts, and instant bot fill!
+          <b>What's New in Card Table Arena</b>
+          Authentic Ken Fisher Wizard cards with gorgeous runes & Z/N ranks, softer tactile card sound effects, auto-clearing tricks with winner lead prompts, instant bot fill, and fully polished multiplayer Poker and The Mind games!
         </div>
         <button class="wn-close" data-act="dismissWhatsNew" aria-label="Dismiss">✕</button>
       </div>`}
@@ -482,7 +482,7 @@
         <span class="roadmap-icon">🧭</span>
         <div>
           <b>More arena games coming soon:</b>
-          <p>Poker (Texas Hold'em), The Mind, and Saboteur are actively in development!</p>
+          <p>Saboteur is actively in development!</p>
         </div>
       </div>
     </main>`;
