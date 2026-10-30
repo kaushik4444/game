@@ -36,24 +36,29 @@
     return { cw, gap };
   }
 
-  function playersHTML(v, ctx) {
-    return `<div class="tm-players">${v.players
-      .map((p, i) => {
-        const backs = Array.from({ length: Math.min(p.cards, 6) }, () => '<i></i>').join('');
-        const more = p.cards > 6 ? `<em>+${p.cards - 6}</em>` : '';
-        const status = v.phase === 'ready' || v.phase === 'levelEnd' ? (p.ready ? 'ready ✓' : 'not ready') : p.voted ? '⭐ agrees' : p.cards ? `${p.cards} card${p.cards === 1 ? '' : 's'}` : 'done ✓';
-        const html = pt.seatHTML({ pid: p.id, name: p.name, avatar: pt.avatarOf(ctx.room, p.id), sub: status, turn: false, me: i === v.me, extra: '' });
-        return `<div class="tm-p ${p.voted ? 'voted' : ''} ${p.cards === 0 && v.phase === 'playing' ? 'done' : ''}">${html}<div class="tm-backs">${backs}${more}</div></div>`;
-      })
-      .join('')}</div>`;
+  function seatHTML(v, ctx, i) {
+    const p = v.players[i];
+    const backs = Array.from({ length: Math.min(p.cards, 6) }, () => '<i></i>').join('');
+    const more = p.cards > 6 ? `<em>+${p.cards - 6}</em>` : '';
+    const status = v.phase === 'ready' || v.phase === 'levelEnd' ? (p.ready ? 'ready ✓' : 'not ready') : p.voted ? '⭐ agrees' : p.cards ? `${p.cards} card${p.cards === 1 ? '' : 's'}` : 'done ✓';
+    const myDiscards = v.discarded.filter((d) => d.player === i);
+    const under = myDiscards.length ? `<div class="tm-seat-disc">${myDiscards.map((d) => `<span class="tm-prev ${d.why === 'mistake' ? 'bad' : 'star'}">${d.card}</span>`).join('')}</div>` : '';
+    const extra = `<div class="tm-backs">${backs}${more}</div>`;
+    return pt.seatHTML({ pid: p.id, name: p.name, avatar: pt.avatarOf(ctx.room, p.id), sub: status, turn: false, me: i === v.me, extra, under });
   }
 
-  function pileHTML(v) {
+  function tableHTML(v, ctx) {
     const top = v.pile.length ? v.pile[v.pile.length - 1] : null;
     const prev = v.pile.slice(-7, -1).map((p) => `<span class="tm-prev ${tone(p.card)}">${p.card}</span>`).join('');
-    const lost = v.discarded.length ? `<div class="tm-disc"><span class="label">Discarded</span>${v.discarded.map((d) => `<span class="tm-prev ${d.why === 'mistake' ? 'bad' : 'star'}" title="${esc(v.players[d.player].name)}">${d.card}</span>`).join('')}</div>` : '';
     const centre = top ? numCard(top.card, 'pile ' + (ui.flash === 'mistake' ? 'bad' : 'pop'), `key="${v.pile.length}"`) : '<div class="tmc slot"><span class="n">?</span></div>';
-    return `<div class="tm-pile ${ui.shake ? 'shake' : ''}"><div class="tm-trail">${prev}</div>${centre}<div class="tm-by">${top ? 'played by ' + esc(v.players[top.player].name) : v.phase === 'playing' ? 'Nothing played yet' : ''}</div>${lost}</div>`;
+    const centerHTML = `<div class="tm-pile ${ui.shake ? 'shake' : ''}"><div class="tm-trail">${prev}</div>${centre}<div class="tm-by">${top ? 'played by ' + esc(v.players[top.player].name) : v.phase === 'playing' ? 'Nothing played yet' : ''}</div></div>`;
+    return pt.tableHTML({
+      n: v.players.length,
+      me: v.me,
+      seat: (i) => seatHTML(v, ctx, i),
+      center: centerHTML,
+      card: () => null,
+    });
   }
 
   function handHTML(v, z) {
@@ -139,8 +144,7 @@
         <div class="row" style="gap:6px">${CardTable.sound.button()}${CardTable.chat.button()}<button class="btn ghost small" data-act="emotes" aria-label="Send a reaction">😀</button><button class="btn ghost small" data-tm="scores">Stats</button><button class="btn ghost small" data-tm="leave" aria-label="Leave table">✕</button></div>
       </div>
       <div class="tm-sub"><span class="tm-lives" title="Lives">${lives}</span><div class="tm-dots" aria-hidden="true">${dots}</div>${stars || '<span></span>'}</div>
-      ${playersHTML(v, ctx)}
-      ${pileHTML(v)}
+      ${tableHTML(v, ctx)}
       ${text || v.me < 0 ? `<div class="wz-status ${v.myTurn && v.phase === 'playing' ? 'mine' : ''} tm-status"><span>${text || 'Watching the team play'}</span></div>` : ''}
       ${handHTML(v, z)}
       ${controlsHTML(v)}
