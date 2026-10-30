@@ -1,7 +1,9 @@
 /* Wizard scorecard: scorekeeping for games played with a real deck. Works offline once loaded; data stays on this device. */
 (() => {
   'use strict';
-  const KEY = 'ct_scorecard_v1';
+  const urlParams = new URLSearchParams(location.search);
+  const gameId = urlParams.get('game') || 'default';
+  const KEY = 'ct_scorecard_v2_' + gameId;
   const $ = document.getElementById('sc');
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const load = () => { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } };
