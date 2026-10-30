@@ -451,7 +451,7 @@
       <div class="whats-new panel">
         <span class="wn-icon">🎉</span>
         <div class="wn-content">
-          <b>What's New in Card Table Arena</b>
+          <b>What's New in Card Table Arena (Updated Today)</b>
           Authentic Ken Fisher Wizard cards with gorgeous runes & Z/N ranks, softer tactile card sound effects, auto-clearing tricks with winner lead prompts, and instant bot fill!
         </div>
         <button class="wn-close" data-act="dismissWhatsNew" aria-label="Dismiss">✕</button>
