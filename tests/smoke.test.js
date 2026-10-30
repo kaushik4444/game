@@ -37,7 +37,7 @@ function client(port, name, token) {
   c.ws.on('open', () => c.send({ t: 'hello', name, token }));
   c.ws.on('message', (raw) => {
     const m = JSON.parse(raw);
-    if (m.t === 'welcome') { Object.assign(c, { id: m.id, token: m.token, games: m.games, tables: m.tables || [] }); }
+    if (m.t === 'welcome') { Object.assign(c, { id: m.id, token: m.token, games: m.games, tables: m.tables || [], announcement: m.announcement }); }
     if (m.t === 'state') { c.room = m.room; c.view = m.view; if (c.playing) c.step(); }
     if (m.t === 'error') c.errors.push(m.message);
     if (m.t === 'chat') c.chats.push(m.m);
@@ -287,6 +287,17 @@ function client(port, name, token) {
   tm.ws.close();
 
   // --- turn time limit: a bot plays for a human who does not act; "off" disables it
+  // --- ANNOUNCEMENT banner text is sent in the welcome message, cleaned and length-limited
+  assert.equal(a.announcement, '');
+  const ann = await start({ port: 0, announcement: '  Maintenance\n at 22:00 ' + 'x'.repeat(400) });
+  const an = client(ann.port, 'Ann2');
+  await an.until(() => an.id, 'welcome announcement');
+  assert.ok(an.announcement.startsWith('Maintenance at 22:00 xxx'));
+  assert.equal(an.announcement.length, 200);
+  an.ws.close();
+  await ann.close();
+  console.log('  ok  announcement is delivered in welcome');
+
   const fast = await start({ port: 0, botDelay: [0, 3], autoAdvanceMs: 20, absentMs: 60000, trickPauseMs: 0, forcedMs: 0, timeScale: 0.01, maxMsgsPerSec: Infinity });
   const t = client(fast.port, 'Tina');
   await t.until(() => t.id, 'welcome T');

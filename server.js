@@ -49,6 +49,8 @@ function start(opts = {}) {
   const botScale = opts.botDelay ? Math.min(1, opts.botDelay[1] / 1600) : 1; // tests run with fast bots; plugin-timed bots follow
   const trickPauseMs = opts.trickPauseMs ?? 1700; // time everybody gets to see a finished trick being collected
   const timeScale = opts.timeScale ?? 1; // tests shrink the turn time limit with this
+  // Optional site-wide notice (set the ANNOUNCEMENT env var, or pass opts.announcement); shown as a dismissible banner on the home screen
+  const announcement = cleanText(opts.announcement ?? process.env.ANNOUNCEMENT ?? '');
   const forcedMs = opts.forcedMs ?? 700; // delay between automatic plays in the last trick of a round
 
   const players = new Map(); // id -> player
@@ -685,7 +687,7 @@ function start(opts = {}) {
     p.connected = true;
     ws.player = p;
     applyProfile(p, msg);
-    send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables() });
+    send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables(), announcement });
     const room = rooms.get(p.room);
     if (room) {
       broadcast(room);
@@ -708,7 +710,14 @@ function start(opts = {}) {
         return;
       }
       if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string') return;
-      if (msg.t === 'hello') return onHello(ws, msg);
+      if (msg.t === 'hello') {
+        // onHello is async (database lookup): a failure must close this socket, not crash the process with an unhandled rejection
+        onHello(ws, msg).catch((e) => {
+          console.error('[server] hello failed:', e.message);
+          ws.close(1011, 'server error');
+        });
+        return;
+      }
       const p = ws.player;
       if (!p || !Object.hasOwn(handlers, msg.t)) return;
       try {

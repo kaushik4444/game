@@ -31,6 +31,8 @@
     unread: 0,
     skew: 0, // server clock minus this device's clock, for the turn countdown
     dismissedWhatsNew: store.get('ct_wn') === '1',
+    announcement: '',
+    dismissedAnnouncement: store.get('ct_ann'), // the text that was dismissed, so a changed announcement shows again
     recentTables: (() => { try { return JSON.parse(store.get('ct_recent') || '[]'); } catch { return []; } })(),
     publicTables: [],
     createVisibility: 'private',
@@ -207,6 +209,7 @@
         S.token = m.token;
         S.games = m.games;
         S.publicTables = m.tables || [];
+        S.announcement = typeof m.announcement === 'string' ? m.announcement : '';
         S.avatars = m.avatars || [];
         S.emotes = m.emotes || [];
         if (!S.name) S.name = m.name;
@@ -545,6 +548,12 @@
           <span class="feat-badge">🛡️ Fair hidden-state deals</span>
         </div>
       </header>
+      ${S.announcement && S.dismissedAnnouncement !== S.announcement ? `
+      <div class="whats-new announcement panel" role="status">
+        <span class="wn-icon">📣</span>
+        <div class="wn-content">${esc(S.announcement)}</div>
+        <button class="wn-close" data-act="dismissAnnouncement" aria-label="Dismiss announcement">✕</button>
+      </div>` : ''}
       ${S.dismissedWhatsNew ? '' : `
       <div class="whats-new panel">
         <span class="wn-icon">🎉</span>
@@ -758,6 +767,11 @@
     removeBot: (el) => send({ t: 'removeBot', id: el.dataset.id }),
     seats: (el) => send({ t: 'setSeats', seats: Number(el.dataset.n) }),
     start: () => send({ t: 'start' }),
+    dismissAnnouncement: () => {
+      S.dismissedAnnouncement = S.announcement;
+      store.set('ct_ann', S.announcement);
+      render();
+    },
     dismissWhatsNew: () => {
       S.dismissedWhatsNew = true;
       store.set('ct_wn', '1');
