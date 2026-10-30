@@ -356,3 +356,19 @@ select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .tool-tile small { color: var(--muted); line-height: 1.35; }
 .tool-tile:hover { border-color: rgba(255, 255, 255, .3); }
 .tool-ico { font-size: 30px; }
+
+/* ---- v0.3.2: rejoin banner/badge, sticky start bar */
+.rejoin-banner { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 12px 16px; border-radius: 16px; background: linear-gradient(135deg, rgba(255, 201, 77, .22), rgba(255, 138, 76, .16)); border: 1px solid rgba(255, 201, 77, .6); box-shadow: 0 8px 24px rgba(0, 0, 0, .3), 0 0 0 0 rgba(255, 201, 77, .5); animation: rjglow 2.2s ease-in-out infinite; }
+.rj-ico { font-size: 30px; flex: none; }
+.rj-text { flex: 1; min-width: 0; display: grid; gap: 2px; font-size: 13px; line-height: 1.35; }
+.rj-text b { font-size: 15px; color: var(--gold); }
+.rj-text span { color: var(--ink); opacity: .9; }
+.rj-text code { background: rgba(0, 0, 0, .3); padding: 0 5px; border-radius: 5px; letter-spacing: .08em; }
+.rejoin-banner .btn { flex: none; }
+@keyframes rjglow { 50% { box-shadow: 0 8px 24px rgba(0, 0, 0, .3), 0 0 0 6px rgba(255, 201, 77, 0); } }
+.recent-table.mine { border-color: var(--gold); background: rgba(255, 201, 77, .12); }
+.rj-badge { font-style: normal; font-weight: 800; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; background: var(--gold); color: #3b2c00; }
+.start-bar { position: sticky; bottom: 0; z-index: 5; margin: 4px -16px 0; padding: 10px 16px calc(env(safe-area-inset-bottom) + 12px); background: linear-gradient(to top, #0b0d1f 60%, rgba(11, 13, 31, 0)); }
+.start-bar.wait { background: linear-gradient(to top, #0b0d1f 70%, rgba(11, 13, 31, 0)); }
+@media (max-width: 520px) { .rejoin-banner { flex-wrap: wrap; } .rejoin-banner .btn { width: 100%; } }
+@media (prefers-reduced-motion: reduce) { .rejoin-banner { animation: none; } }

@@ -37,9 +37,10 @@ function client(port, name, token) {
   c.ws.on('open', () => c.send({ t: 'hello', name, token }));
   c.ws.on('message', (raw) => {
     const m = JSON.parse(raw);
-    if (m.t === 'welcome') { Object.assign(c, { id: m.id, token: m.token, games: m.games, tables: m.tables || [], announcement: m.announcement }); }
+    if (m.t === 'welcome') { Object.assign(c, { id: m.id, token: m.token, games: m.games, tables: m.tables || [], rejoin: m.rejoin || [], announcement: m.announcement }); }
     if (m.t === 'state') { c.room = m.room; c.view = m.view; if (c.playing) c.step(); }
     if (m.t === 'error') c.errors.push(m.message);
+    if (m.t === 'tables') { c.tables = m.tables || []; c.rejoin = m.rejoin || []; }
     if (m.t === 'chat') c.chats.push(m.m);
     if (m.t === 'notice') c.notices.push(m.text);
     if (m.t === 'tables') c.tables = m.tables;
@@ -312,6 +313,8 @@ function client(port, name, token) {
   K.send({ t: 'leave' });
   await J.until(() => J.room.members.find((m) => m.name === 'Kit').bot, 'bot took Kit\'s seat');
   await J.until(() => J.chats.some((m) => /Kit left the game/.test(m.text)) && J.notices.some((x) => /Kit left/.test(x)), 'leave announced');
+  await K.until(() => K.rejoin && K.rejoin.some((r) => r.code === J.room.code), 'home screen is told about the waiting seat');
+  assert.deepEqual(J.rejoin || [], []); // people without a held seat get no rejoin offer
   // coming back through the home screen's "Spectate" button must still give the seat back
   K.send({ t: 'join', code: J.room.code, spectate: true });
   await K.until(() => K.view && K.view.me >= 0 && K.room.spectators.length === 0, 'Kit got the seat back, not a spectator');
@@ -324,7 +327,21 @@ function client(port, name, token) {
   const J2 = client(rj.port, 'Jo', J.token);
   await J2.until(() => J2.room, 'Jo reconnected');
   await K.until(() => K.chats.some((m) => /Jo reconnected/.test(m.text)), 'reconnect announced');
-  for (const c of [H, K, J2]) c.ws.close();
+  // a solo game against bots: stepping out must not destroy the table; it waits (paused) for the player to come back
+  const SO = client(rj.port, 'Solo');
+  await SO.until(() => SO.id, 'welcome Solo');
+  SO.send({ t: 'create', gameId: 'wizard' });
+  await SO.until(() => SO.room, 'solo table');
+  SO.send({ t: 'start' });
+  await SO.until(() => SO.view && SO.room.status === 'playing', 'solo started');
+  const soloCode = SO.room.code;
+  SO.send({ t: 'leave' });
+  await SO.until(() => SO.rejoin && SO.rejoin.some((r) => r.code === soloCode && r.paused), 'paused table offered for rejoin');
+  SO.send({ t: 'join', code: soloCode });
+  await SO.until(() => SO.room && SO.room.code === soloCode && SO.view && SO.view.me >= 0, 'solo player is back in the seat');
+  assert.equal(SO.room.hostId, SO.id);
+  console.log('  ok  a solo game waits for its player after leaving');
+  for (const c of [H, K, J2, SO]) c.ws.close();
   await rj.close();
   console.log('  ok  leave, rejoin (never a spectator), reconnect notices and host hand-over');
 

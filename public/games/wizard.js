@@ -102,20 +102,21 @@
   /** "Total bid 4 / 3 tricks": how the bids compare with the tricks available this round. */
   function bidStrip(v) {
     const tricks = v.round;
+    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
     const won = v.players.reduce((s, p) => s + p.tricks, 0);
     const hidden = v.players.some((p) => p.hasBid && p.bid === null);
     const placed = v.players.filter((p) => p.hasBid).length;
     let bids;
-    if (hidden) bids = `<b>${placed}</b> of ${v.n} bids placed (hidden)`;
-    else if (placed < v.n) bids = `Bids so far <b>${v.players.reduce((s, p) => s + (p.bid || 0), 0)}</b> (${placed}/${v.n})`;
-    else {
+    if (placed < v.n) {
+      const sofar = hidden ? '' : `Bids so far <b>${v.players.reduce((s, p) => s + (p.bid || 0), 0)}</b> for ${plural(tricks, 'trick')} · `;
+      bids = `${sofar}<b>${placed}</b>/${v.n} bid${hidden ? ' (hidden)' : ''}`;
+    } else {
       const total = v.players.reduce((s, p) => s + p.bid, 0);
       const diff = total - tricks;
       const tag = diff === 0 ? 'exactly even' : diff > 0 ? `over by ${diff}` : `under by ${-diff}`;
-      bids = `Total bid <b class="${diff === 0 ? 'neg' : ''}">${total}</b> / <b>${tricks}</b> tricks <span class="muted">(${tag})</span>`;
+      bids = `Total bid <b class="${diff === 0 ? 'neg' : ''}">${total}</b> / <b>${tricks}</b> ${tricks === 1 ? 'trick' : 'tricks'} <span class="muted">(${tag})</span>`;
     }
-    const tail = placed < v.n || hidden ? ` / <b>${tricks}</b> tricks` : '';
-    return `<div class="wz-bids"><span>${bids}${tail}</span><span>Tricks played <b>${won}</b> / ${tricks}</span></div>`;
+    return `<div class="wz-bids"><span>${bids}</span><span>Tricks played <b>${won}</b> / ${tricks}</span></div>`;
   }
 
   function controlsHTML(v) {

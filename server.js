@@ -148,9 +148,21 @@ function start(opts = {}) {
       }));
   }
 
+  /** Running games where this player still owns a seat that a bot is playing: they can take it back with one tap. */
+  function rejoinFor(p) {
+    const out = [];
+    for (const room of rooms.values()) {
+      if (room.status !== 'playing' || p.room === room.code) continue;
+      if (room.members.some((m) => m.id === p.id && m.bot)) out.push({ code: room.code, gameId: room.gameId, paused: !humans(room).some(isConnected) });
+    }
+    return out;
+  }
+
+  const tablesMsg = (p) => ({ t: 'tables', tables: publicTables(), rejoin: rejoinFor(p) });
+
   function broadcastTables() {
-    const message = { t: 'tables', tables: publicTables() };
-    for (const p of players.values()) if (p.connected) send(p.ws, message);
+    const tables = publicTables();
+    for (const p of players.values()) if (p.connected) send(p.ws, { t: 'tables', tables, rejoin: rejoinFor(p) });
   }
 
   function broadcast(room) {
@@ -384,6 +396,12 @@ function start(opts = {}) {
       sys(room, `🚪 ${p.name} left the table`);
     }
     notifyOthers(room, p.id, `🚪 ${p.name} left the table`);
+    if (!humans(room).length && room.status === 'playing') {
+      // the last human stepped out of a running game (e.g. a solo game against bots): keep it paused so they can come
+      // back with one tap; the idle collector closes it after 10 minutes if nobody does
+      broadcast(room);
+      return;
+    }
     if (!humans(room).length) {
       // nobody left at the table: in a lobby a spectator can take over the empty table, otherwise it closes
       const heir = room.status === 'lobby' && room.spectators[0];
@@ -567,6 +585,7 @@ function start(opts = {}) {
     leave(p) {
       leaveRoom(p);
       send(p.ws, { t: 'left' });
+      send(p.ws, tablesMsg(p)); // the home screen can offer "Rejoin" straight away
     },
 
     addBot(p) {
@@ -756,7 +775,7 @@ function start(opts = {}) {
     p.connected = true;
     ws.player = p;
     applyProfile(p, msg);
-    send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables(), announcement });
+    send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables(), rejoin: rejoinFor(p), announcement });
     clearTimeout(p.dropTimer);
     const room = rooms.get(p.room);
     if (room) {

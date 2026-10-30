@@ -48,6 +48,8 @@ Tableverse uses PostgreSQL (Neon, Supabase, or self-hosted) for persistent playe
 - **Private or public tables**: tables start Private by default. The host can switch a lobby between Private (invite code/link only) and Public (listed in Sessions in Progress) after inviting friends. Private tables never appear in the directory.
 
 - **Leaving and rejoining**: when a player leaves a running game a bot keeps their seat and everyone is told. Rejoining (from *Recent tables*, an invite link or the table code) always gives the seat back, even if the home screen only offered *Spectate*, and the bot stops playing. Everyone also sees when a player joins a lobby, loses connection (after 4 s) or reconnects.
+- **Rejoin badge**: if you leave (or get dropped from) a running game, the home screen shows a gold "Your game is still running" banner with a one-tap **Rejoin** button, and the table gets a *Rejoin* badge in *Recent tables*. If you were the last human at the table (for example a solo game against bots) the game is paused instead of closed, and waits up to 10 minutes for you.
+- **Smaller UX changes**: the avatar picker is collapsed behind *Change* (home and lobby) so the name and table code stay on screen; the lobby's *Start game* button stays pinned to the bottom; Wizard's bid strip reads `Bids so far 2 for 3 tricks · 2/4 bid` while bidding and `Total bid 4 / 3 tricks (over by 1)` once everyone has bid.
 - **Host hand-over**: if the host leaves, or drops offline, the host role passes to the next player who is still there (in a lobby, a spectator takes over an empty table). The new host gets a 👑 notice and a chat line.
 - **Colours**: the Wizard card is royal purple and gold so it can no longer be confused with the blue suit, which is now a brighter blue.
 

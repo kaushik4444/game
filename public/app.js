@@ -35,6 +35,8 @@
     dismissedAnnouncement: store.get('ct_ann'), // the text that was dismissed, so a changed announcement shows again
     recentTables: (() => { try { return JSON.parse(store.get('ct_recent') || '[]'); } catch { return []; } })(),
     publicTables: [],
+    rejoin: [], // running games where a bot is playing this player's seat
+    avatarOpen: false,
     createVisibility: 'private',
     sessionListOpen: store.get('ct_sessions_open') !== '0',
   };
@@ -136,10 +138,20 @@
     if (!S.recentTables.length) return '';
     const rows = S.recentTables.map((r) => {
       const live = S.publicTables.find((t) => t.code === r.code);
-      const status = live ? (live.status === 'playing' ? 'In progress' : 'Available') : 'Expired or private';
-      return `<button class="recent-table" data-act="rejoin" data-code="${esc(r.code)}"><span>↺</span><b>${esc(r.name)}</b><code>${esc(r.code)}</code><small>${status}</small></button>`;
+      const mine = S.rejoin.some((x) => x.code === r.code);
+      const status = mine ? 'Your seat is waiting' : live ? (live.status === 'playing' ? 'In progress' : 'Available') : 'Private or expired';
+      return `<button class="recent-table ${mine ? 'mine' : ''}" data-act="rejoin" data-code="${esc(r.code)}"><span>↺</span><b>${esc(r.name)}</b><code>${esc(r.code)}</code>${mine ? '<em class="rj-badge">Rejoin</em>' : `<small>${status}</small>`}</button>`;
     }).join('');
     return `<section class="panel recent-panel"><div class="panel-tag">RECENT TABLES</div><div class="recent-tables">${rows}</div></section>`;
+  }
+
+  /** Big banner at the top of the home screen: a game is running and a bot is playing your seat. */
+  function rejoinBannerHTML() {
+    if (!S.rejoin.length) return '';
+    return S.rejoin.map((r) => {
+      const g = gameMeta(r.gameId) || { name: r.gameId, icon: '🎴' };
+      return `<div class="rejoin-banner panel" role="status"><span class="rj-ico">${esc(g.icon || '🎴')}</span><div class="rj-text"><b>Your ${esc(g.name)} game is still running</b><span>${r.paused ? 'Everyone stepped out, so it is paused' : 'A bot is playing your seat'} at table <code>${esc(r.code)}</code>. Jump back in to carry on.</span></div><button class="btn" data-act="rejoin" data-code="${esc(r.code)}">Rejoin</button></div>`;
+    }).join('');
   }
 
   function tableByCode(code) {
@@ -191,7 +203,7 @@
       const action = publicTableAction(t);
       return `<div class="public-table"><span class="public-game-icon">${esc(g.icon || '🎴')}</span><div class="public-table-info"><b>${esc(g.name)}</b><span>${esc(t.host)}'s table · ${t.members}/${t.seats} players${t.spectators ? ` · 👁 ${t.spectators}` : ''}</span></div><button class="btn ${action.cls} small" data-act="joinPublic" data-code="${esc(t.code)}" ${action.disabled ? 'disabled' : ''}>${action.label}</button></div>`;
     }).join('');
-    return `<section class="panel public-tables-panel"><div class="row" style="justify-content:space-between"><div><div class="panel-tag">SESSIONS IN PROGRESS <span class="session-count">${count}</span></div><p class="public-help">Open lobbies can be joined; active games can be watched.</p></div><button class="btn ghost small" data-act="toggleSessions" aria-expanded="${S.sessionListOpen}">${S.sessionListOpen ? 'Hide' : 'Show'}</button></div>${S.sessionListOpen ? count ? `<div class="public-tables">${rows}</div>` : '<p class="hint">No active tables right now. Start one and invite friends!</p>' : ''}</section>`;
+    return `<section class="panel public-tables-panel"><div class="row" style="justify-content:space-between"><div><div class="panel-tag">SESSIONS IN PROGRESS <span class="session-count">${count}</span></div><p class="public-help">Open lobbies can be joined; active games can be watched.</p></div><button class="btn ghost small" data-act="toggleSessions" aria-expanded="${S.sessionListOpen}">${S.sessionListOpen ? 'Hide' : 'Show'}</button></div>${S.sessionListOpen ? count ? `<div class="public-tables">${rows}</div>` : '<p class="hint">Nobody is hosting a public table right now.</p>' : ''}</section>`;
   }
 
   function joinTable(code, mode) {
@@ -209,6 +221,7 @@
         S.token = m.token;
         S.games = m.games;
         S.publicTables = m.tables || [];
+        S.rejoin = m.rejoin || [];
         S.announcement = typeof m.announcement === 'string' ? m.announcement : '';
         S.avatars = m.avatars || [];
         S.emotes = m.emotes || [];
@@ -228,6 +241,7 @@
       }
       case 'tables':
         S.publicTables = m.tables || [];
+        S.rejoin = m.rejoin || [];
         if (!S.room) render();
         break;
       case 'emote':
@@ -313,8 +327,8 @@
       </div>
       <label class="label" for="name">Your name</label>
       <input id="name" type="text" maxlength="20" autocomplete="nickname" placeholder="Type your nickname" value="${esc(myName)}">
-      <div class="label" style="margin-top:12px">Choose your avatar</div>
-      <div class="av-picks">${picks}</div>
+      <div class="row" style="justify-content:space-between;margin-top:12px"><span class="label">Avatar</span><button type="button" class="btn ghost small" data-act="toggleAvatars" aria-expanded="${S.avatarOpen}">${S.avatarOpen ? 'Done' : 'Change'}</button></div>
+      ${S.avatarOpen ? `<div class="av-picks">${picks}</div>` : ''}
     </div>`;
   }
 
@@ -548,6 +562,7 @@
           <span class="feat-badge">🛡️ Fair hidden-state deals</span>
         </div>
       </header>
+      ${rejoinBannerHTML()}
       ${S.announcement && S.dismissedAnnouncement !== S.announcement ? `
       <div class="whats-new announcement panel" role="status">
         <span class="wn-icon">📣</span>
@@ -674,8 +689,8 @@
       ${opts ? `<section class="panel"><h3 style="margin-bottom:10px">Variants &amp; options</h3><div class="opts">${opts}</div>${isHost ? '' : '<p class="hint" style="margin-top:8px">Only the host can change these.</p>'}</section>` : ''}
       ${
         isHost
-          ? `<button class="btn big" data-act="start">Start game${open > 0 ? ` <small>· ${open} bot${open === 1 ? '' : 's'} will join</small>` : ''}</button>`
-          : '<p class="label" style="text-align:center">Waiting for the host to start…</p>'
+          ? `<div class="start-bar"><button class="btn big" data-act="start">Start game${open > 0 ? ` <small>· ${open} bot${open === 1 ? '' : 's'} will join</small>` : ''}</button></div>`
+          : '<div class="start-bar wait"><p class="label" style="text-align:center;margin:0">Waiting for the host to start…</p></div>'
       }
     </main>`;
   }
@@ -703,7 +718,7 @@
       act: (action) => send({ t: 'act', action }),
       leave: () => {
         const playing = S.room.status === 'playing' && !isSpectator();
-        if (!playing || confirm('Leave the game? A bot will take your seat.')) send({ t: 'leave' });
+        if (!playing || confirm('Leave the game? A bot takes your seat, and you can rejoin from the home screen.')) send({ t: 'leave' });
       },
       rematch: () => send({ t: 'rematch' }),
       showRules: () => showRules(S.room.gameId),
@@ -728,10 +743,12 @@
   const actions = {
     avatar: (el) => {
       S.avatar = el.dataset.a;
+      S.avatarOpen = false;
       store.set('ct_avatar', S.avatar);
       send({ t: 'setName', name: S.name || undefined, avatar: S.avatar });
       render();
     },
+    toggleAvatars: () => { S.avatarOpen = !S.avatarOpen; render(); },
     emotes: () => toggleEmoteBar(),
     activityLog: () => openActivityLog(),
     sound: () => { CardTable.sound.toggle(); render(); },
