@@ -46,8 +46,11 @@ function start(opts = {}) {
   const autoAdvanceMs = opts.autoAdvanceMs ?? 8000; // pause between rounds
   const absentMs = opts.absentMs ?? 15000; // a disconnected human's turn is played by a bot after this
   const maxMsgsPerSec = opts.maxMsgsPerSec ?? 30; // per socket; humans send a handful of messages per minute
+  const botScale = opts.botDelay ? Math.min(1, opts.botDelay[1] / 1600) : 1; // tests run with fast bots; plugin-timed bots follow
   const trickPauseMs = opts.trickPauseMs ?? 1700; // time everybody gets to see a finished trick being collected
   const timeScale = opts.timeScale ?? 1; // tests shrink the turn time limit with this
+  // Optional site-wide notice (set the ANNOUNCEMENT env var, or pass opts.announcement); shown as a dismissible banner on the home screen
+  const announcement = cleanText(opts.announcement ?? process.env.ANNOUNCEMENT ?? '');
   const forcedMs = opts.forcedMs ?? 700; // delay between automatic plays in the last trick of a round
 
   const players = new Map(); // id -> player
@@ -210,12 +213,13 @@ function start(opts = {}) {
         try {
           const scores = g.scores ? g.scores() : [];
           const maxScore = scores.length ? Math.max(...scores) : 0;
+          // games without a scores() hook: record the match but do not invent winners
           const participants = room.members.map((m, idx) => ({
             playerId: m.id,
             name: m.name,
             seat: idx,
             score: scores[idx] ?? 0,
-            isWinner: (scores[idx] ?? 0) === maxScore,
+            isWinner: scores.length > 0 && (scores[idx] ?? 0) === maxScore,
             isBot: Boolean(m.bot),
           }));
           dbMatches.recordMatch({
@@ -256,7 +260,7 @@ function start(opts = {}) {
     if (!waiting.length) {
       const auto = g.autoAction();
       if (!auto) return;
-      delay = autoAdvanceMs;
+      delay = (typeof g.autoDelayMs === 'function' && g.autoDelayMs() * botScale) || autoAdvanceMs;
       run = () => g.act(null, auto);
       valid = () => awaitingOf(g).length === 0;
     } else if (forced) {
@@ -276,7 +280,7 @@ function start(opts = {}) {
         // a real-time game (The Mind) times its bots itself: the bot that wants to play soonest goes next
         const t = bots.map((m) => ({ m, d: g.botDelayMs(m.id) })).sort((x, y) => x.d - y.d)[0];
         who = t.m;
-        botMs = Math.max(0, t.d);
+        botMs = Math.max(0, t.d * botScale);
       }
       if (who) {
         delay = Math.max(who.bot ? (botMs !== null ? botMs : rand(botDelay[0], botDelay[1])) : absentMs, pause);
@@ -450,6 +454,18 @@ function start(opts = {}) {
       if (!room) return sendError(p, `No table with code ${code || '?'}`);
       if (p.room === code && (room.members.some((m) => m.id === p.id) || isSpec(room, p.id))) return broadcast(room);
       const wantsSpectate = msg.spectate === true;
+      // Came back to a running game they left (a bot kept their seat): take the seat back, same player id.
+      const seat = room.members.find((m) => m.id === p.id);
+      if (seat && room.status === 'playing' && seat.bot && !wantsSpectate) {
+        if (p.room) leaveRoom(p);
+        seat.bot = false;
+        p.room = room.code;
+        sys(room, `${p.name} is back and took the seat from the bot`);
+        broadcast(room);
+        sendChatLog(p, room);
+        schedule(room);
+        return;
+      }
       if (room.status !== 'lobby') {
         // the game is already running: the newcomer watches
         if (room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
@@ -671,7 +687,7 @@ function start(opts = {}) {
     p.connected = true;
     ws.player = p;
     applyProfile(p, msg);
-    send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables() });
+    send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables(), announcement });
     const room = rooms.get(p.room);
     if (room) {
       broadcast(room);
@@ -694,7 +710,14 @@ function start(opts = {}) {
         return;
       }
       if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string') return;
-      if (msg.t === 'hello') return onHello(ws, msg);
+      if (msg.t === 'hello') {
+        // onHello is async (database lookup): a failure must close this socket, not crash the process with an unhandled rejection
+        onHello(ws, msg).catch((e) => {
+          console.error('[server] hello failed:', e.message);
+          ws.close(1011, 'server error');
+        });
+        return;
+      }
       const p = ws.player;
       if (!p || !Object.hasOwn(handlers, msg.t)) return;
       try {

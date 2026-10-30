@@ -32,6 +32,8 @@ function rig(n, { chips, holes, board } = {}) {
 }
 const act = (g, i, a) => E.applyAction(g, g.players[i].id, a);
 const must = (g, i, a) => { const r = act(g, i, a); assert.ok(r.ok, JSON.stringify(a) + ': ' + r.error); };
+/** Deal out an all-in runout street by street, as the server does. */
+const runout = (g) => { let n = 0; while (g.phase === 'runout') { assert.ok(E.applyAction(g, null, { type: 'deal' }).ok); n++; } return n; };
 
 console.log('hands');
 
@@ -126,6 +128,10 @@ test('side pots: a short all-in only wins what it covered', () => {
   must(g, 0, { type: 'allin' }); // 100
   must(g, 1, { type: 'allin' }); // 300
   must(g, 2, { type: 'call' });
+  assert.equal(g.phase, 'runout');
+  assert.equal(g.board.length, 0);
+  assert.ok(g.players.every((p) => p.shown), 'cards are turned over');
+  assert.equal(runout(g), 3); // flop, turn, river
   assert.equal(g.phase, 'handEnd');
   assert.deepEqual(g.result.pots.map((p) => p.amount), [300, 400]);
   assert.deepEqual(g.players.map((p) => p.chips), [300, 400, 0]);
@@ -136,6 +142,7 @@ test('an uncalled bet is returned', () => {
   const g = rig(2, { chips: [1000, 200], holes: ['2S 3D', 'AS AD'], board: '9H 5C 8D JS 4H' });
   must(g, 0, { type: 'allin' });
   must(g, 1, { type: 'call' });
+  runout(g);
   assert.deepEqual(g.players.map((p) => p.chips), [800, 400]);
 });
 
@@ -213,9 +220,10 @@ test('300 bot-only games finish, bots are always legal and chips are conserved',
     let steps = 0;
     while (g.phase !== 'gameOver') {
       assert.ok(++steps < 30000, 'seed ' + seed + ' did not finish');
-      const sum = g.players.reduce((s, p) => s + p.chips + (g.phase === 'betting' ? p.total : 0), 0);
+      const sum = g.players.reduce((s, p) => s + p.chips + (g.phase === 'betting' || g.phase === 'runout' ? p.total : 0), 0);
       assert.equal(sum, total, 'chips conserved, seed ' + seed);
       if (g.phase === 'handEnd') { hands++; must(g, 0, { type: 'continue' }); continue; }
+      if (g.phase === 'runout') { must(g, 0, { type: 'deal' }); continue; }
       const p = g.players[g.turn];
       const a = E.botAction(g, p.id);
       const r = E.applyAction(g, p.id, a);

@@ -1,9 +1,16 @@
 # One-click deploy on Render (render.com): New + > Blueprint, pick this repo.
 services:
   - type: web
-    name: card-table
+    name: tableverse
     runtime: node
     plan: free
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /healthz
+    envVars:
+      # Postgres (Neon etc.). Leave unset to run on the in-memory store.
+      - key: DATABASE_URL
+        sync: false
+      # Optional site-wide notice shown as a dismissible banner on the home screen. Leave empty for none.
+      - key: ANNOUNCEMENT
+        sync: false

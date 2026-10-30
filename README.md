@@ -24,11 +24,13 @@ Tableverse uses PostgreSQL (Neon, Supabase, or self-hosted) for persistent playe
   Or automatically applied when the server boots.
 - **Anonymous Player Accounts**: Guests are automatically provisioned with permanent internal UUIDs and bearer tokens hashed with SHA-256 before storage.
 - **Completed Match Archive**: Every completed game is saved to the `matches` and `match_participants` tables with player scores and winner tracking.
+- **Announcement banner**: set the `ANNOUNCEMENT` environment variable (max 200 characters, plain text) to show a dismissible 📣 notice on the home screen. Changing the text shows it again to players who dismissed the old one; unset it to remove the banner.
 - **Render Deployment**:
   1. Create a Web Service connected to your repository.
   2. Set `DATABASE_URL` in the Render Environment Variables tab pointing to your Neon database.
   3. Build Command: `npm install`
   4. Start Command: `npm start`
+  5. Optional: set `ANNOUNCEMENT` to show a site-wide banner. `render.yaml` (service `tableverse`) declares both variables.
 
 
 ## What's new in v0.2
