@@ -131,7 +131,10 @@ function start(opts = {}) {
         gameId: room.gameId,
         status: room.status,
         seats: room.seats,
-        members: room.members.filter((m) => !m.bot).length,
+        // A filled bot seat is still an occupied player seat, so the directory
+        // always reflects the live table population rather than only humans.
+        members: room.members.length,
+        humans: room.members.filter((m) => !m.bot).length,
         host: room.members.find((m) => m.id === room.hostId)?.name || 'Host',
         spectators: room.spectators.length,
       }));
@@ -469,6 +472,13 @@ function start(opts = {}) {
       const room = hostRoom(p, 'lobby');
       if (!room) return;
       room.options = sanitizeOptions(games.get(room.gameId), msg.options);
+      broadcast(room);
+    },
+
+    setVisibility(p, msg) {
+      const room = hostRoom(p, 'lobby');
+      if (!room) return;
+      room.visibility = msg.visibility === 'public' ? 'public' : 'private';
       broadcast(room);
     },
 

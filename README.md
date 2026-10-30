@@ -21,7 +21,7 @@ Bots can fill any open seat.
 - **Game activity log**: every table keeps a public play-by-play feed showing who bid, played, checked, folded, or used a special action. It is visible below the table on desktop and available from the 📜 Log button on smaller screens.
 - **Recent tables**: the home screen remembers the last five tables on this device and offers one-click rejoin while they still exist.
 - **Sessions in progress**: the home screen lists active public tables. Join a lobby before it starts, or spectate it once play has begun. Empty/disconnected tables expire automatically (15 minutes for lobbies, 60 minutes for stalled games).
-- **Private or public tables**: when creating a table, choose Private (invite code/link only) or Public (listed in Sessions in Progress). Private tables never appear in the directory.
+- **Private or public tables**: tables start Private by default. The host can switch a lobby between Private (invite code/link only) and Public (listed in Sessions in Progress) after inviting friends. Private tables never appear in the directory.
 
 > Tables are discoverable to everyone currently using Card Table. Do not put private information in table codes, player names, chat, or game logs.
 

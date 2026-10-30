@@ -72,6 +72,11 @@ input[type=text]:focus-visible, .btn:focus-visible, button:focus-visible { outli
 .visibility-option input { margin-top: 3px; accent-color: var(--gold); }
 .visibility-option span { display: grid; gap: 4px; }
 .visibility-option small { color: var(--muted); line-height: 1.4; }
+.visibility-control { display: flex; justify-content: center; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--panel-line); }
+.visibility-control small { flex-basis: 100%; color: var(--muted); line-height: 1.35; }
+.visibility-status { display: inline-flex; align-items: center; min-height: 30px; padding: 4px 10px; border: 1px solid var(--panel-line); border-radius: 999px; font-size: 13px; font-weight: 700; }
+.visibility-status.private { color: var(--muted); }
+.visibility-status.public { color: var(--good); border-color: rgba(52, 211, 153, .4); background: rgba(52, 211, 153, .1); }
 .activity-sheet { width: min(560px, calc(100vw - 28px)); max-height: min(75vh, 680px); overflow: auto; }
 .activity-list { list-style: none; padding: 0; margin: 14px 0 0; text-align: left; }
 .activity-list li { display: flex; gap: 8px; align-items: baseline; padding: 9px 0; border-bottom: 1px solid var(--panel-line); font-size: 14px; }

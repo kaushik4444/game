@@ -215,6 +215,8 @@
         S.room = null;
         S.view = null;
         S.chat = [];
+        // Refresh directory after returning to the home screen; the last tables
+        // update may have arrived while this client was still inside a room.
         S.unread = 0;
         closeChat();
         wasMyTurn = false;
@@ -592,6 +594,7 @@
           <button class="btn small wa" data-act="whatsapp">WhatsApp</button>
           ${navigator.share ? '<button class="btn ghost small" data-act="share">Share…</button>' : ''}
         </div>
+        ${isHost ? `<div class="visibility-control"><span class="visibility-status ${r.visibility === 'public' ? 'public' : 'private'}">${r.visibility === 'public' ? '🌐 Public table' : '🔒 Private table'}</span><button class="btn ghost small" data-act="toggleVisibility">${r.visibility === 'public' ? 'Make private' : 'Make public'}</button><small>${r.visibility === 'public' ? 'Anyone can find this table in Sessions in Progress.' : 'Only people with the invite link or code can join.'}</small></div>` : ''}
       </section>
       <section class="panel">${profileHTML()}</section>
       <section class="panel">
@@ -678,18 +681,11 @@
     },
     create: (el) => {
       const game = el.dataset.game;
-      const overlay = document.createElement('div');
-      overlay.className = 'overlay';
-      overlay.innerHTML = `<div class="sheet create-sheet" data-stop="1"><h2>Open a ${esc((gameMeta(game) || {}).name || 'game')} table</h2><p class="hint">Choose who can discover this table.</p><div class="visibility-options"><label class="visibility-option"><input type="radio" name="table-visibility" value="private" checked><span><b>🔒 Private</b><small>Only people with the invite code or link can join.</small></span></label><label class="visibility-option"><input type="radio" name="table-visibility" value="public"><span><b>🌐 Public</b><small>Listed on the home screen so anyone can join the lobby or spectate the game.</small></span></label></div><div class="row" style="justify-content:flex-end;margin-top:16px"><button class="btn ghost small" data-create-cancel>Cancel</button><button class="btn small" data-create-confirm>Create table</button></div></div>`;
-      overlay.addEventListener('click', (e) => {
-        if (e.target === overlay || e.target.closest('[data-create-cancel]')) return overlay.remove();
-        if (e.target.closest('[data-create-confirm]')) {
-          const visibility = overlay.querySelector('input[name="table-visibility"]:checked')?.value || 'private';
-          overlay.remove();
-          send({ t: 'create', gameId: game, visibility, name: S.name || undefined, avatar: S.avatar || undefined });
-        }
-      });
-      document.body.appendChild(overlay);
+      send({ t: 'create', gameId: game, visibility: 'private', name: S.name || undefined, avatar: S.avatar || undefined });
+    },
+    toggleVisibility: () => {
+      const cur = S.room && S.room.visibility;
+      send({ t: 'setVisibility', visibility: cur === 'public' ? 'private' : 'public' });
     },
     rejoin: (el) => joinTable(el.dataset.code),
     joinPublic: (el) => joinTable(el.dataset.code),
