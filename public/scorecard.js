@@ -78,10 +78,11 @@
       .join('');
     const s = sum(c[key]);
     let bar;
+    let bidForbidden = false;
     if (c.stage === 'bid') {
       const d = s - r;
-      const warn = G.plusMinus && s === r;
-      bar = `<div class="sumbar ${warn ? 'warn' : ''}">Total bid <b>${s}</b> / <b>${r}</b> tricks · ${d === 0 ? (warn ? `the dealer must change their bid (Plus / Minus 1)` : 'exactly right') : d > 0 ? `over by ${d}` : `under by ${-d}`}</div>`;
+      bidForbidden = G.plusMinus && s === r;
+      bar = `<div class="sumbar ${bidForbidden ? 'warn' : ''}">Total bid <b>${s}</b> / <b>${r}</b> tricks · ${d === 0 ? (bidForbidden ? `the dealer must change their bid (Plus / Minus 1 rule)` : 'exactly right') : d > 0 ? `over by ${d}` : `under by ${-d}`}</div>`;
     } else bar = `<div class="sumbar ${s === r ? 'ok' : 'warn'}">Tricks won <b>${s}</b> / <b>${r}</b>${s === r ? ' ✓' : s < r ? ` · ${r - s} still to enter` : ` · ${s - r} too many`}</div>`;
     const last = G.editing === null && G.done.length + 1 >= G.rounds;
     return `<div class="stage"><span class="${c.stage === 'bid' ? 'on' : ''}">1 · Bids</span><span class="${c.stage === 'won' ? 'on' : ''}">2 · Tricks won</span></div>
@@ -89,7 +90,7 @@
       <p class="sub">${r} card${r === 1 ? '' : 's'} each${c.stage === 'bid' ? ` · ${esc(G.names[first])} bids first` : ''}</p>
       <div class="plist">${rows}</div>${bar}
       <div class="row">${c.stage === 'won' ? '<button class="btn ghost" data-act="back">← Bids</button>' : ''}
-      ${c.stage === 'bid' ? '<button class="btn big" data-act="tricks">Bids are in →</button>' : `<button class="btn big" data-act="save" ${s === r ? '' : 'disabled'}>${last ? 'Save and finish' : G.editing !== null ? 'Save changes' : 'Save round'}</button>`}</div>`;
+      ${c.stage === 'bid' ? `<button class="btn big" data-act="tricks" ${bidForbidden ? 'disabled' : ''}>Bids are in →</button>` : `<button class="btn big" data-act="save" ${s === r ? '' : 'disabled'}>${last ? 'Save and finish' : G.editing !== null ? 'Save changes' : 'Save round'}</button>`}</div>`;
   }
 
   function scoresHTML() {
