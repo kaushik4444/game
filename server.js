@@ -12,8 +12,8 @@ const dbPlayers = require('./db/players');
 const dbAuth = require('./db/auth');
 const dbMatches = require('./db/matches');
 const { createMatchQueue, defaultSpoolDir } = require('./db/matchQueue');
-const { hitRateLimit } = require('./db/rateLimit');
 const { makeAuthEmailSender } = require('./lib/email');
+const { createAuthRoutes } = require('./lib/authRoutes');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = {
@@ -83,6 +83,7 @@ function start(opts = {}) {
   const players = new Map(); // id -> player
   const tokens = new Map(); // secret token -> player
   const rooms = new Map(); // code -> room
+  let purgeTimer = null;
 
   // ------------------------------------------------------------ http
   const readJsonBody = (req) =>
@@ -121,77 +122,22 @@ function start(opts = {}) {
     res.end(JSON.stringify(body));
   };
 
-  const includeDebugTokens = env.NODE_ENV === 'test';
+  const includeDebugTokens = env.NODE_ENV === 'test'; // only tests receive raw tokens in responses (they are not browsers)
   const emailSender = opts.emailSender || makeAuthEmailSender({ env, logger: opts.log || console });
-  const testRate = (prodLimit, testLimit, envKey) => Number(env[envKey] || (includeDebugTokens ? testLimit : prodLimit));
-
-  const authRateConfig = {
-    registerIp: { scope: 'auth:register:ip', limit: testRate(8, 500, 'RL_REGISTER_IP_LIMIT'), windowMs: 10 * 60 * 1000 },
-    registerEmail: { scope: 'auth:register:email', limit: testRate(4, 100, 'RL_REGISTER_EMAIL_LIMIT'), windowMs: 60 * 60 * 1000 },
-    loginIp: { scope: 'auth:login:ip', limit: testRate(25, 1000, 'RL_LOGIN_IP_LIMIT'), windowMs: 10 * 60 * 1000 },
-    loginEmail: { scope: 'auth:login:email', limit: testRate(8, 200, 'RL_LOGIN_EMAIL_LIMIT'), windowMs: 15 * 60 * 1000 },
-    resendIp: { scope: 'auth:resend:ip', limit: testRate(10, 400, 'RL_RESEND_IP_LIMIT'), windowMs: 60 * 60 * 1000 },
-    resendEmail: { scope: 'auth:resend:email', limit: testRate(3, 100, 'RL_RESEND_EMAIL_LIMIT'), windowMs: 60 * 60 * 1000 },
-    forgotIp: { scope: 'auth:forgot:ip', limit: testRate(10, 400, 'RL_FORGOT_IP_LIMIT'), windowMs: 60 * 60 * 1000 },
-    forgotEmail: { scope: 'auth:forgot:email', limit: testRate(5, 100, 'RL_FORGOT_EMAIL_LIMIT'), windowMs: 60 * 60 * 1000 },
-    resetIp: { scope: 'auth:reset:ip', limit: testRate(12, 400, 'RL_RESET_IP_LIMIT'), windowMs: 60 * 60 * 1000 },
-    resetToken: { scope: 'auth:reset:token', limit: testRate(6, 150, 'RL_RESET_TOKEN_LIMIT'), windowMs: 15 * 60 * 1000 },
-  };
-
-  const requestIp = (req) => {
-    const xff = trustProxy ? String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() : '';
-    return xff || req.socket.remoteAddress || 'unknown';
-  };
-
-  async function checkAuthLimit(res, checks) {
-    for (const c of checks) {
-      if (!c || !c.key) continue;
-      const out = await hitRateLimit({ scope: c.scope, key: c.key, limit: c.limit, windowMs: c.windowMs });
-      if (!out.allowed) {
-        res.setHeader('Retry-After', String(Math.max(1, Math.ceil(out.resetMs / 1000))));
-        sendJson(res, 429, { ok: false, error: 'Too many requests. Please wait and try again.' });
-        return false;
-      }
-    }
-    return true;
-  }
-
-  const normEmail = (s) => String(s || '').trim().toLowerCase();
-  const normUsername = (s) => String(s || '').trim().toLowerCase();
-  const hashKey = (s) => crypto.createHash('sha256').update(String(s || '')).digest('hex');
-
-  const deliverVerification = async ({ email, token }) => emailSender.sendVerification({ email, token });
-  const deliverReset = async ({ email, token }) => emailSender.sendPasswordReset({ email, token });
-
-  const secureCookie = production ? '; Secure' : '';
-  const sessionCookie = (token) => `ct_session=${encodeURIComponent(token)}; Path=/; Max-Age=${60 * 60 * 24 * 30}; HttpOnly; SameSite=Lax${secureCookie}`;
-  const clearSessionCookie = () => `ct_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${secureCookie}`;
-  const readCookieToken = (req) => {
-    const raw = String(req.headers.cookie || '');
-    for (const chunk of raw.split(';')) {
-      const [k, v] = chunk.trim().split('=');
-      if (k === 'ct_session' && v) return decodeURIComponent(v);
-    }
-    return null;
-  };
-
-  const setSession = (res, token) => res.setHeader('Set-Cookie', sessionCookie(token));
-  const clearSession = (res) => res.setHeader('Set-Cookie', clearSessionCookie());
-
-  function validateCsrf(req, body) {
-    const h = String(req.headers['x-csrf-token'] || '');
-    const b = body && typeof body.csrfToken === 'string' ? body.csrfToken : '';
-    if (!h || !b || h !== b) throw new Error('Invalid CSRF token.');
-  }
-
-  function ensureCsrfToken(req, res) {
-    const existing = String(req.headers['x-csrf-token'] || '').trim();
-    const csrf = existing || crypto.randomBytes(24).toString('hex');
-    res.setHeader('X-CSRF-Token', csrf);
-    return csrf;
-  }
-
-  const authTokenFromReq = (req) => readCookieToken(req);
+  const authRoutes = createAuthRoutes({
+    env,
+    production,
+    trustProxy,
+    emailSender,
+    sendJson,
+    readJsonBody,
+    log: opts.log || console,
+    // a signed-out or reset account must not keep playing on an already open socket
+    onSignedOut: ({ playerId, token }) => {
+      const p = players.get(playerId);
+      if (p && p.ws && (!token || p.token === token)) p.ws.close(4001, 'signed out');
+    },
+  });
 
   const server = http.createServer(async (req, res) => {
     let rel;
@@ -202,187 +148,7 @@ function start(opts = {}) {
       return res.end();
     }
 
-    if (req.method === 'POST' && rel === '/api/auth/register') {
-      try {
-        const body = await readJsonBody(req);
-        const ip = requestIp(req);
-        if (!(await checkAuthLimit(res, [
-          { ...authRateConfig.registerIp, key: ip },
-          { ...authRateConfig.registerEmail, key: hashKey(normEmail(body.email)) },
-        ]))) return;
-        const out = await dbAuth.registerEmail({
-          email: body.email,
-          username: body.username,
-          password: body.password,
-          displayName: body.displayName,
-          avatar: body.avatar,
-        });
-        if (!includeDebugTokens) await deliverVerification({ email: out.email, token: out.verifyToken });
-        setSession(res, out.token);
-        const csrfToken = ensureCsrfToken(req, res);
-        return sendJson(res, 201, {
-          ok: true,
-          requiresVerification: true,
-          token: includeDebugTokens ? out.token : undefined,
-          csrfToken,
-          player: out.player,
-          ...(includeDebugTokens ? { debug: { verifyToken: out.verifyToken } } : {}),
-          message: 'Account created. Please verify your email before entering the lobby.',
-        });
-      } catch (err) {
-        const msg = /already exists|username|valid email|Password must/i.test(err.message) ? err.message : /Email delivery failed/i.test(err.message) ? err.message : 'Registration failed.';
-        return sendJson(res, /already exists|username|valid email|Password must|Email delivery failed/i.test(msg) ? 400 : 500, { ok: false, error: msg });
-      }
-    }
-
-    if (req.method === 'GET' && rel === '/api/auth/username-available') {
-      try {
-        const url = new URL(req.url, 'http://x');
-        const out = await dbAuth.checkUsernameAvailability({ username: url.searchParams.get('username') || '' });
-        return sendJson(res, 200, { ok: true, ...out });
-      } catch (err) {
-        return sendJson(res, 500, { ok: false, error: err.message || 'Could not check username.' });
-      }
-    }
-
-    if (req.method === 'GET' && rel === '/api/auth/csrf') {
-      const csrfToken = ensureCsrfToken(req, res);
-      return sendJson(res, 200, { ok: true, csrfToken });
-    }
-
-    if (req.method === 'GET' && rel === '/api/auth/session') {
-      const tok = readCookieToken(req);
-      if (!tok) return sendJson(res, 200, { ok: true, authenticated: false });
-      const info = await dbAuth.sessionInfo(tok);
-      const csrfToken = ensureCsrfToken(req, res);
-      return sendJson(res, 200, { ok: true, authenticated: !!(info && info.authenticated), player: info.player || null, emailVerified: !!info.emailVerified, csrfToken });
-    }
-
-    if (req.method === 'POST' && rel === '/api/auth/logout-all') {
-      try {
-        const body = await readJsonBody(req);
-        validateCsrf(req, body);
-        const tok = authTokenFromReq(req);
-        const out = await dbAuth.revokeAllSessionsForCurrent(tok);
-        clearSession(res);
-        return sendJson(res, 200, { ok: true, revoked: out.revoked || 0 });
-      } catch (err) {
-        return sendJson(res, 400, { ok: false, error: err.message || 'Logout failed.' });
-      }
-    }
-
-    if (req.method === 'POST' && rel === '/api/auth/ws-token') {
-      try {
-        const body = await readJsonBody(req);
-        validateCsrf(req, body);
-        const tok = readCookieToken(req);
-        const out = await dbAuth.issueWebSocketTokenFromSession(tok);
-        return sendJson(res, 200, { ok: true, token: out.token });
-      } catch (err) {
-        const msg = err && err.message ? err.message : 'Could not issue websocket token.';
-        if (/Not authenticated/i.test(msg)) return sendJson(res, 401, { ok: false, error: 'Not authenticated.' });
-        if (/verify your email/i.test(msg)) return sendJson(res, 403, { ok: false, error: msg });
-        return sendJson(res, 400, { ok: false, error: msg });
-      }
-    }
-
-    if (req.method === 'POST' && rel === '/api/auth/logout') {
-      try {
-        const body = await readJsonBody(req);
-        validateCsrf(req, body);
-        await dbAuth.revokeSession(authTokenFromReq(req));
-        clearSession(res);
-        return sendJson(res, 200, { ok: true });
-      } catch (err) {
-        return sendJson(res, 400, { ok: false, error: err.message || 'Logout failed.' });
-      }
-    }
-
-    if (req.method === 'POST' && rel === '/api/auth/login') {
-      try {
-        const body = await readJsonBody(req);
-        const ip = requestIp(req);
-        if (!(await checkAuthLimit(res, [
-          { ...authRateConfig.loginIp, key: ip },
-          { ...authRateConfig.loginEmail, key: hashKey(normEmail(body.email)) },
-        ]))) return;
-        const out = await dbAuth.loginEmail({ email: body.email, password: body.password });
-        setSession(res, out.token);
-        const csrfToken = ensureCsrfToken(req, res);
-        return sendJson(res, 200, { ok: true, token: includeDebugTokens ? out.token : undefined, csrfToken, player: out.player, requiresVerification: !out.player.email_verified });
-      } catch (err) {
-        const msg = /Invalid email or password/i.test(err.message) ? err.message : 'Login failed.';
-        return sendJson(res, /Invalid email or password/i.test(msg) ? 401 : 500, { ok: false, error: msg });
-      }
-    }
-
-    if (req.method === 'POST' && rel === '/api/auth/resend-verification') {
-      try {
-        const body = await readJsonBody(req);
-        const ip = requestIp(req);
-        if (!(await checkAuthLimit(res, [
-          { ...authRateConfig.resendIp, key: ip },
-          { ...authRateConfig.resendEmail, key: hashKey(normEmail(body.email)) },
-        ]))) return;
-        const out = await dbAuth.resendVerification({ email: body.email });
-        if (out && out.verifyToken && out.email && !includeDebugTokens) await deliverVerification({ email: out.email, token: out.verifyToken });
-        return sendJson(res, 200, {
-          ok: true,
-          ...(includeDebugTokens && out && out.verifyToken ? { debug: { verifyToken: out.verifyToken } } : {}),
-          message: 'If this account exists, a verification email has been sent.',
-        });
-      } catch (err) {
-        if (/Email delivery failed/i.test(err.message || '')) return sendJson(res, 503, { ok: false, error: err.message });
-        return sendJson(res, 500, { ok: false, error: 'Could not process request.' });
-      }
-    }
-
-    if (req.method === 'POST' && rel === '/api/auth/verify-email') {
-      try {
-        const body = await readJsonBody(req);
-        await dbAuth.verifyEmailToken(body.token);
-        return sendJson(res, 200, { ok: true, message: 'Email verified. You can now enter the lobby.' });
-      } catch (err) {
-        return sendJson(res, 400, { ok: false, error: err.message || 'Verification failed.' });
-      }
-    }
-
-    if (req.method === 'POST' && rel === '/api/auth/forgot-password') {
-      try {
-        const body = await readJsonBody(req);
-        const ip = requestIp(req);
-        if (!(await checkAuthLimit(res, [
-          { ...authRateConfig.forgotIp, key: ip },
-          { ...authRateConfig.forgotEmail, key: hashKey(normEmail(body.email)) },
-        ]))) return;
-        const out = await dbAuth.requestPasswordReset({ email: body.email });
-        if (out && out.resetToken && out.email && !includeDebugTokens) await deliverReset({ email: out.email, token: out.resetToken });
-        return sendJson(res, 200, {
-          ok: true,
-          ...(includeDebugTokens && out && out.resetToken ? { debug: { resetToken: out.resetToken } } : {}),
-          message: 'If this account exists, a reset email has been sent.',
-        });
-      } catch (err) {
-        if (/Email delivery failed/i.test(err.message || '')) return sendJson(res, 503, { ok: false, error: err.message });
-        return sendJson(res, 500, { ok: false, error: 'Could not process request.' });
-      }
-    }
-
-    if (req.method === 'POST' && rel === '/api/auth/reset-password') {
-      try {
-        const body = await readJsonBody(req);
-        const ip = requestIp(req);
-        if (!(await checkAuthLimit(res, [
-          { ...authRateConfig.resetIp, key: ip },
-          { ...authRateConfig.resetToken, key: hashKey(body.token || '') },
-        ]))) return;
-        await dbAuth.resetPassword({ token: body.token, newPassword: body.newPassword });
-        clearSession(res);
-        return sendJson(res, 200, { ok: true, message: 'Password updated. Please log in again.' });
-      } catch (err) {
-        return sendJson(res, 400, { ok: false, error: err.message || 'Reset failed.' });
-      }
-    }
+    if (await authRoutes.handle(req, res, rel)) return;
 
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.writeHead(405, { Allow: 'GET, HEAD, POST' });
@@ -1126,7 +892,7 @@ function start(opts = {}) {
     p.ws = ws;
     p.connected = true;
     ws.player = p;
-    send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables(), rejoin: rejoinFor(p), announcement });
+    send(ws, { t: 'welcome', id: p.id, token: includeDebugTokens ? p.token : undefined, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables(), rejoin: rejoinFor(p), announcement });
     clearTimeout(p.dropTimer);
     const room = rooms.get(p.room);
     if (room) {
@@ -1143,7 +909,7 @@ function start(opts = {}) {
 
   wss.on('connection', (ws, req) => {
     ws.ip = clientIp(req);
-    ws.cookieToken = readCookieToken(req);
+    ws.cookieToken = authRoutes.readSessionToken(req);
     const open = (socketsByIp.get(ws.ip) || 0) + 1;
     socketsByIp.set(ws.ip, open);
     ws.once('close', () => {
@@ -1254,6 +1020,7 @@ function start(opts = {}) {
   async function close({ drainMs = 0 } = {}) {
     clearInterval(ticker);
     clearInterval(gc);
+    clearInterval(purgeTimer);
     if (drainMs) await matchQueue.drain(drainMs); // let pending match writes finish (shutdown)
     matchQueue.close();
     for (const room of rooms.values()) clearTimeout(room.timer);
@@ -1265,7 +1032,14 @@ function start(opts = {}) {
   // serve players on a database it cannot use (and in production it must not silently fall back to memory).
   return database.prepare().then((info) => {
     if (production && info && info.mode === 'postgres') emailSender.assertReady();
-    if (info && info.mode === 'postgres') matchQueue.replaySpool(); // results a previous run could not save
+    if (info && info.mode === 'postgres') {
+      matchQueue.replaySpool(); // results a previous run could not save
+      // old rate-limit rows, expired sessions and used tokens: once now, then every 6 hours (best effort)
+      const purge = () => dbAuth.purgeExpired().catch((e) => (opts.log || console).error('[auth] housekeeping failed: ' + e.message));
+      purge();
+      purgeTimer = setInterval(purge, 6 * 60 * 60 * 1000);
+      purgeTimer.unref();
+    }
     return new Promise((resolve) => server.listen(port, () => resolve({ server, port: server.address().port, close, database: info, matchQueue })));
   });
 }

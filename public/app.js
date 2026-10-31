@@ -15,7 +15,7 @@
   const S = {
     id: null,
     token: '', // short-lived websocket auth credential (never persisted)
-    csrf: store.get('ct_csrf') || '',
+    csrf: '', // fetched from the server (cookie-backed), never stored
     emailVerified: store.get('ct_email_verified') === '1',
     name: store.get('ct_name') || '',
     username: store.get('ct_username') || '',
@@ -97,55 +97,41 @@
   // ------------------------------------------------------------ auth + connection
   const send = (msg) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); };
 
-  async function postJson(url, body) {
-    const payload = Object.assign({}, body || {});
-    if (S.csrf && payload.csrfToken == null) payload.csrfToken = S.csrf;
-    const headers = { 'Content-Type': 'application/json' };
-    if (S.csrf) headers['X-CSRF-Token'] = S.csrf;
+  // CSRF: the server sets a ct_csrf cookie; every POST repeats its value in a header (the cookie alone proves nothing).
+  async function ensureCsrf(force) {
+    if (S.csrf && !force) return S.csrf;
+    try {
+      const r = await fetch('/api/auth/csrf', { credentials: 'same-origin' });
+      const out = await r.json();
+      S.csrf = (out && out.csrfToken) || '';
+    } catch { S.csrf = ''; }
+    return S.csrf;
+  }
+
+  async function postJson(url, body, retried) {
+    await ensureCsrf();
     const r = await fetch(url, {
       method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': S.csrf },
+      body: JSON.stringify(body || {}),
     });
     let data = {};
     try { data = await r.json(); } catch { /* ignore */ }
-    const hdrCsrf = r.headers.get('x-csrf-token');
-    if (hdrCsrf) {
-      S.csrf = hdrCsrf;
-      store.set('ct_csrf', hdrCsrf);
+    if (r.status === 403 && /CSRF/i.test(data.error || '') && !retried) { // cookie expired or was cleared: fetch a fresh pair once
+      await ensureCsrf(true);
+      return postJson(url, body, true);
     }
-    if (data && data.csrfToken) {
-      S.csrf = data.csrfToken;
-      store.set('ct_csrf', data.csrfToken);
-    }
+    if (data && data.csrfToken) S.csrf = data.csrfToken;
     if (!r.ok || data.ok === false) throw new Error(data.error || `Request failed (${r.status})`);
     return data;
   }
 
-  async function ensureCsrf() {
-    if (S.csrf) return S.csrf;
-    const r = await fetch('/api/auth/csrf');
-    let out = {};
-    try { out = await r.json(); } catch { out = {}; }
-    const tok = (out && out.csrfToken) || r.headers.get('x-csrf-token') || '';
-    if (tok) {
-      S.csrf = tok;
-      store.set('ct_csrf', tok);
-    }
-    return S.csrf;
-  }
-
   async function hydrateSession() {
     try {
-      const r = await fetch('/api/auth/session', {
-        headers: S.csrf ? { 'X-CSRF-Token': S.csrf } : {},
-      });
+      const r = await fetch('/api/auth/session', { credentials: 'same-origin' });
       const out = await r.json();
-      const hdrCsrf = r.headers.get('x-csrf-token');
-      if (hdrCsrf) {
-        S.csrf = hdrCsrf;
-        store.set('ct_csrf', hdrCsrf);
-      }
+      if (out && out.csrfToken) S.csrf = out.csrfToken;
       if (!out || !out.ok || !out.authenticated) return false;
       S.name = out.player && out.player.display_name ? out.player.display_name : S.name;
       S.username = out.player && out.player.username ? out.player.username : S.username;
@@ -156,10 +142,6 @@
       if (S.username) store.set('ct_username', S.username);
       if (S.avatar) store.set('ct_avatar', S.avatar);
       store.set('ct_email_verified', S.emailVerified ? '1' : '0');
-      if (out.csrfToken) {
-        S.csrf = out.csrfToken;
-        store.set('ct_csrf', out.csrfToken);
-      }
       return true;
     } catch {
       return false;
@@ -171,13 +153,12 @@
     S.csrf = '';
     S.emailVerified = false;
     S.id = null;
-    store.set('ct_csrf', '');
+    store.set('ct_csrf', ''); // older versions kept it in localStorage
     store.set('ct_email_verified', '0');
   }
 
   async function doLogoutAll() {
     try {
-      await ensureCsrf();
       await postJson('/api/auth/logout-all', {});
     } catch {
       // ignore network failures; clear local state regardless
@@ -191,7 +172,6 @@
 
   async function doLogout() {
     try {
-      await ensureCsrf();
       await postJson('/api/auth/logout', {});
     } catch {
       // ignore network failures; clear local state regardless
@@ -201,13 +181,6 @@
     S.room = null;
     S.view = null;
     renderAuth('Logged out.', 'login');
-  }
-
-  async function wsAuthToken() {
-    await ensureCsrf();
-    const out = await postJson('/api/auth/ws-token', {});
-    if (!out || !out.token) throw new Error('Missing websocket token');
-    return out.token;
   }
 
   function authPageHTML(tab = 'login', msg = '') {
@@ -223,7 +196,7 @@
             <input id="loginPassword" type="password" required minlength="8" placeholder="Password">
             <button class="btn big-join" type="submit">Log in</button>
           </form>
-          <div class="row" style="margin-top:10px"><button class="btn ghost small" data-act="forgotPassword">Forgot password?</button></div>
+          <div class="row" style="margin-top:10px"><button class="btn ghost small" data-act="forgotPassword">Forgot password?</button><button class="btn ghost small" data-act="resendVerification">Resend verification email</button></div>
         ` : `
           <form id="registerForm" class="join-form">
             <input id="registerName" type="text" maxlength="20" required placeholder="Display name">
@@ -243,10 +216,7 @@
   async function doLogin(email, password) {
     const out = await postJson('/api/auth/login', { email, password });
     S.token = '';
-    if (out.csrfToken) {
-      S.csrf = out.csrfToken;
-      store.set('ct_csrf', out.csrfToken);
-    }
+    if (out.csrfToken) S.csrf = out.csrfToken;
     S.name = out.player && out.player.display_name ? out.player.display_name : S.name;
     S.username = out.player && out.player.username ? out.player.username : S.username;
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
@@ -266,10 +236,7 @@
   async function doRegister(name, username, email, password) {
     const out = await postJson('/api/auth/register', { displayName: name, username, email, password, avatar: S.avatar || undefined });
     S.token = '';
-    if (out.csrfToken) {
-      S.csrf = out.csrfToken;
-      store.set('ct_csrf', out.csrfToken);
-    }
+    if (out.csrfToken) S.csrf = out.csrfToken;
     S.name = out.player && out.player.display_name ? out.player.display_name : name;
     S.username = out.player && out.player.username ? out.player.username : String(username || '').toLowerCase();
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
@@ -279,7 +246,18 @@
     if (S.name) store.set('ct_name', S.name);
     if (S.username) store.set('ct_username', S.username);
     if (S.avatar) store.set('ct_avatar', S.avatar);
-    renderAuth('Account created. Check your email for a verification link.');
+    renderAuth(out.emailSent === false ? (out.message || 'Account created, but the verification email could not be sent.') : 'Account created. Check your email for a verification link.');
+  }
+
+  async function doResendVerification() {
+    const email = window.prompt('Enter the email you registered with:');
+    if (!email) return;
+    try {
+      await postJson('/api/auth/resend-verification', { email });
+      toast('If this account needs verifying, a new link has been sent.');
+    } catch (e) {
+      toast(e.message || 'Could not send the email');
+    }
   }
 
   async function doForgotPassword() {
@@ -316,21 +294,13 @@
     }
   }
 
-  async function connect() {
-    let wsToken;
-    try {
-      wsToken = await wsAuthToken();
-      S.token = wsToken;
-    } catch {
-      renderAuth('', 'login');
-      return;
-    }
+  // The session cookie rides along with the WebSocket upgrade, so the page never handles the session token.
+  function connect() {
     ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
     ws.onopen = () => {
       retry = 0;
       $banner.hidden = true;
-      send({ t: 'hello', token: wsToken || undefined });
-      S.token = '';
+      send({ t: 'hello' });
     };
     ws.onmessage = (e) => {
       let m;
@@ -344,6 +314,13 @@
         $banner.hidden = false;
         return;
       }
+      if (e.code === 4001) { // signed out elsewhere, or the password was reset
+        clearClientSession();
+        $banner.hidden = true;
+        renderAuth('You have been signed out. Please log in again.', 'login');
+        return;
+      }
+      if (e.code === 1008) return; // refused (not logged in, not verified): the login screen is already showing, do not loop
       $banner.textContent = 'Reconnecting…';
       $banner.hidden = false;
       setTimeout(connect, Math.min(5000, 500 * 2 ** retry++));
@@ -566,6 +543,7 @@
     if (a.dataset.act === 'showLogin') return renderAuth('', 'login');
     if (a.dataset.act === 'showRegister') return renderAuth('', 'register');
     if (a.dataset.act === 'forgotPassword') return doForgotPassword();
+    if (a.dataset.act === 'resendVerification') return doResendVerification();
   });
 
   const verifyToken = new URLSearchParams(location.search).get('token');

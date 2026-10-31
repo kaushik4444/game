@@ -189,16 +189,16 @@ const matchOf = (over = {}) => ({ matchKey: uuid(), roomCode: 'ABCDEF', gameId: 
       const email = `uv.${Date.now()}@test.local`;
       const reg = await dbAuth.registerEmail({ email, username: `uv${String(Date.now()).slice(-6)}`, password: 'TestPass123!', displayName: 'UV' });
       await assert.rejects(dbAuth.loginEmail({ email, password: 'bad-pass' }), /invalid email or password/i);
-      const wsTok = await dbAuth.issueWebSocketTokenFromSession(reg.token).then(() => null, (e) => e);
-      assert.ok(wsTok && /verify your email/i.test(String(wsTok.message || '')));
+      const info = await dbAuth.sessionInfo(reg.token);
+      assert.equal(info.authenticated, true);
+      assert.equal(info.emailVerified, false, 'an unverified account has a session but is not allowed into the lobby');
     });
     await test('verification token is single-use and concurrency-safe', async () => {
       const email = `verify.${Date.now()}@test.local`;
       const reg = await dbAuth.registerEmail({ email, username: `verify${String(Date.now()).slice(-6)}`, password: 'TestPass123!', displayName: 'V' });
       await dbAuth.verifyEmailToken(reg.verifyToken);
       await assert.rejects(dbAuth.verifyEmailToken(reg.verifyToken), /already been used/i);
-      const ws = await dbAuth.issueWebSocketTokenFromSession(reg.token);
-      assert.equal(ws.token, reg.token);
+      assert.equal((await dbAuth.sessionInfo(reg.token)).emailVerified, true);
 
       const reg2 = await dbAuth.registerEmail({ email: `verify2.${Date.now()}@test.local`, username: `verifyb${String(Date.now()).slice(-6)}`, password: 'TestPass123!', displayName: 'V2' });
       const settled = await Promise.allSettled([dbAuth.verifyEmailToken(reg2.verifyToken), dbAuth.verifyEmailToken(reg2.verifyToken)]);

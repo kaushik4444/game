@@ -4,10 +4,21 @@ const db = require('./pool');
 const dbPlayers = require('./players');
 const argon2 = require('@node-rs/argon2');
 
+/** An error whose message is safe to show to the person using the form. Anything else is a server fault (500). */
+class AuthError extends Error {
+  constructor(message, status = 400, extra = {}) {
+    super(message);
+    this.name = 'AuthError';
+    this.status = status;
+    Object.assign(this, extra);
+  }
+}
+
 const TOKEN_BYTES = 32;
-const SESSION_TTL_DAYS = Number(process.env.AUTH_SESSION_TTL_DAYS || 30);
-const EMAIL_VERIFY_TTL_MIN = Number(process.env.AUTH_VERIFY_TTL_MIN || 60 * 24);
-const PASSWORD_RESET_TTL_MIN = Number(process.env.AUTH_RESET_TTL_MIN || 30);
+const positive = (v, fallback) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : fallback);
+const sessionTtlDays = () => positive(process.env.AUTH_SESSION_TTL_DAYS, 30);
+const verifyTtlMin = () => positive(process.env.AUTH_VERIFY_TTL_MIN, 60 * 24);
+const resetTtlMin = () => positive(process.env.AUTH_RESET_TTL_MIN, 30);
 const PROVIDER_EMAIL = 'email';
 const USERNAME_RE = /^[a-z0-9_]{3,24}$/;
 
@@ -78,25 +89,6 @@ async function revokeAllSessionsForCurrent(rawToken) {
   });
 }
 
-async function issueWebSocketTokenFromSession(rawToken) {
-  if (!db.hasDatabase() || !rawToken) throw new Error('Not authenticated.');
-  const tokenHash = hashToken(rawToken);
-  const r = await db.query(
-    `SELECT s.player_id, i.email_verified_at
-     FROM auth_sessions s
-     JOIN auth_identities i ON i.player_id = s.player_id AND i.provider = $2
-     WHERE s.token_hash = $1
-       AND s.revoked_at IS NULL
-       AND (s.expires_at IS NULL OR s.expires_at > NOW())
-     ORDER BY i.created_at ASC
-     LIMIT 1`,
-    [tokenHash, PROVIDER_EMAIL]
-  );
-  if (!r.rows.length) throw new Error('Not authenticated.');
-  if (!r.rows[0].email_verified_at) throw new Error('Please verify your email before entering the lobby.');
-  return { token: rawToken };
-}
-
 async function readSessionFromCookie(rawToken) {
   if (!db.hasDatabase() || !rawToken) return null;
   const tokenHash = hashToken(rawToken);
@@ -121,7 +113,7 @@ async function revokeAllSessionsForPlayer(playerId) {
 async function createSession(client, playerId) {
   const raw = newRawToken();
   const tokenHash = hashToken(raw);
-  const ttlDays = Number.isFinite(SESSION_TTL_DAYS) && SESSION_TTL_DAYS > 0 ? SESSION_TTL_DAYS : 30;
+  const ttlDays = sessionTtlDays();
   await client.query(
     'INSERT INTO auth_sessions (player_id, token_hash, expires_at) VALUES ($1, $2, NOW() + ($3::text || \' days\')::interval)',
     [playerId, tokenHash, String(ttlDays)]
@@ -141,23 +133,23 @@ async function issueEmailToken(client, { playerId, purpose, email, ttlMinutes })
 }
 
 async function registerEmail({ email, username, password, displayName, avatar }) {
-  if (!db.hasDatabase()) throw new Error('Email authentication requires PostgreSQL (set DATABASE_URL).');
-  if (!isEmail(email)) throw new Error('Please enter a valid email address.');
-  if (typeof password !== 'string' || password.length < 8 || password.length > 200) throw new Error('Password must be 8-200 characters.');
+  if (!db.hasDatabase()) throw new AuthError('Email authentication requires PostgreSQL (set DATABASE_URL).', 503);
+  if (!isEmail(email)) throw new AuthError('Please enter a valid email address.');
+  if (typeof password !== 'string' || password.length < 8 || password.length > 200) throw new AuthError('Password must be 8-200 characters.');
 
   const e = normEmail(email);
   const u = normUsername(username);
-  if (!isUsername(u)) throw new Error('Username must be 3-24 chars: lowercase letters, numbers, underscore.');
+  if (!isUsername(u)) throw new AuthError('Username must be 3-24 chars: lowercase letters, numbers, underscore.');
 
   const pwHash = await hashPassword(password);
 
   try {
     return await db.withTransaction(async (client) => {
       const existsEmail = await client.query('SELECT 1 FROM auth_identities WHERE provider = $1 AND provider_user_id = $2 LIMIT 1', [PROVIDER_EMAIL, e]);
-      if (existsEmail.rows.length) throw new Error('An account already exists for this email.');
+      if (existsEmail.rows.length) throw new AuthError('An account already exists for this email.');
 
       const existsUsername = await client.query('SELECT 1 FROM players WHERE LOWER(username) = LOWER($1) LIMIT 1', [u]);
-      if (existsUsername.rows.length) throw new Error('This username is already taken.');
+      if (existsUsername.rows.length) throw new AuthError('This username is already taken.');
 
       const p = await client.query(
         `INSERT INTO players (username, display_name, avatar, is_anonymous)
@@ -177,7 +169,7 @@ async function registerEmail({ email, username, password, displayName, avatar })
         playerId: player.id,
         purpose: 'verify_email',
         email: e,
-        ttlMinutes: Number.isFinite(EMAIL_VERIFY_TTL_MIN) && EMAIL_VERIFY_TTL_MIN > 0 ? EMAIL_VERIFY_TTL_MIN : 1440,
+        ttlMinutes: verifyTtlMin(),
       });
 
       const sessionToken = await createSession(client, player.id);
@@ -186,11 +178,11 @@ async function registerEmail({ email, username, password, displayName, avatar })
   } catch (err) {
     if (err && (err.code === '23505' || /already exists/i.test(err.message || ''))) {
       if ((err.constraint || '').includes('username') || /username/i.test(err.message || '')) {
-        throw new Error('This username is already taken.');
+        throw new AuthError('This username is already taken.');
       }
-      throw new Error('An account already exists for this email.');
+      throw new AuthError('An account already exists for this email.');
     }
-    if (err && err.code === '23514') throw new Error('Username must be 3-24 chars: lowercase letters, numbers, underscore.');
+    if (err && err.code === '23514') throw new AuthError('Username must be 3-24 chars: lowercase letters, numbers, underscore.');
     throw err;
   }
 }
@@ -204,38 +196,31 @@ async function checkUsernameAvailability({ username }) {
 }
 
 async function loginEmail({ email, password }) {
-  if (!db.hasDatabase()) throw new Error('Email authentication requires PostgreSQL (set DATABASE_URL).');
-  if (!isEmail(email) || typeof password !== 'string') throw new Error('Invalid email or password.');
+  if (!db.hasDatabase()) throw new AuthError('Email authentication requires PostgreSQL (set DATABASE_URL).', 503);
+  if (!isEmail(email) || typeof password !== 'string') throw new AuthError('Invalid email or password.', 401);
 
-  const e = normEmail(email);
+  // Argon2 takes tens of milliseconds: do it without holding a database connection or transaction open.
+  const r = await db.query(
+    `SELECT p.id, p.username, p.display_name, p.avatar, p.created_at,
+            i.password_hash, i.email, i.email_verified_at
+     FROM auth_identities i
+     JOIN players p ON p.id = i.player_id
+     WHERE i.provider = $1 AND i.provider_user_id = $2
+     LIMIT 1`,
+    [PROVIDER_EMAIL, normEmail(email)]
+  );
+  if (!r.rows.length) {
+    await verifyPassword(DUMMY_HASH, password); // keep the timing close to a real check
+    throw new AuthError('Invalid email or password.', 401);
+  }
+  const row = r.rows[0];
+  if (!(await verifyPassword(row.password_hash, password))) throw new AuthError('Invalid email or password.', 401);
 
-  return db.withTransaction(async (client) => {
-    const r = await client.query(
-      `SELECT p.id, p.username, p.display_name, p.avatar, p.created_at,
-              i.password_hash, i.email, i.email_verified_at
-       FROM auth_identities i
-       JOIN players p ON p.id = i.player_id
-       WHERE i.provider = $1 AND i.provider_user_id = $2
-       LIMIT 1`,
-      [PROVIDER_EMAIL, e]
-    );
-
-    if (!r.rows.length) {
-      await verifyPassword(DUMMY_HASH, password);
-      throw new Error('Invalid email or password.');
-    }
-
-    const row = r.rows[0];
-    const ok = await verifyPassword(row.password_hash, password);
-    if (!ok) throw new Error('Invalid email or password.');
-
-    const sessionToken = await createSession(client, row.id);
-    return makeSessionResult(row, sessionToken);
-  });
+  return makeSessionResult(row, await createSession(db, row.id));
 }
 
 async function resendVerification({ email }) {
-  if (!db.hasDatabase()) throw new Error('Email authentication requires PostgreSQL (set DATABASE_URL).');
+  if (!db.hasDatabase()) throw new AuthError('Email authentication requires PostgreSQL (set DATABASE_URL).', 503);
   const e = normEmail(email);
   if (!isEmail(e)) return { ok: true }; // do not leak which emails exist
 
@@ -253,15 +238,15 @@ async function resendVerification({ email }) {
       playerId: r.rows[0].player_id,
       purpose: 'verify_email',
       email: e,
-      ttlMinutes: Number.isFinite(EMAIL_VERIFY_TTL_MIN) && EMAIL_VERIFY_TTL_MIN > 0 ? EMAIL_VERIFY_TTL_MIN : 1440,
+      ttlMinutes: verifyTtlMin(),
     });
     return { ok: true, verifyToken, email: e };
   });
 }
 
 async function verifyEmailToken(rawToken) {
-  if (!db.hasDatabase()) throw new Error('Email authentication requires PostgreSQL (set DATABASE_URL).');
-  if (!rawToken || typeof rawToken !== 'string') throw new Error('Invalid verification token.');
+  if (!db.hasDatabase()) throw new AuthError('Email authentication requires PostgreSQL (set DATABASE_URL).', 503);
+  if (!rawToken || typeof rawToken !== 'string') throw new AuthError('Invalid verification token.');
   const tokenHash = hashToken(rawToken);
 
   return db.withTransaction(async (client) => {
@@ -283,9 +268,9 @@ async function verifyEmailToken(rawToken) {
          LIMIT 1`,
         [tokenHash]
       );
-      if (!reason.rows.length) throw new Error('Invalid verification token.');
-      if (reason.rows[0].used_at) throw new Error('This verification link has already been used.');
-      throw new Error('This verification link has expired.');
+      if (!reason.rows.length) throw new AuthError('Invalid verification token.');
+      if (reason.rows[0].used_at) throw new AuthError('This verification link has already been used.');
+      throw new AuthError('This verification link has expired.');
     }
 
     const t = use.rows[0];
@@ -300,7 +285,7 @@ async function verifyEmailToken(rawToken) {
 }
 
 async function requestPasswordReset({ email }) {
-  if (!db.hasDatabase()) throw new Error('Email authentication requires PostgreSQL (set DATABASE_URL).');
+  if (!db.hasDatabase()) throw new AuthError('Email authentication requires PostgreSQL (set DATABASE_URL).', 503);
   const e = normEmail(email);
   if (!isEmail(e)) return { ok: true };
 
@@ -318,16 +303,16 @@ async function requestPasswordReset({ email }) {
       playerId: r.rows[0].player_id,
       purpose: 'password_reset',
       email: e,
-      ttlMinutes: Number.isFinite(PASSWORD_RESET_TTL_MIN) && PASSWORD_RESET_TTL_MIN > 0 ? PASSWORD_RESET_TTL_MIN : 30,
+      ttlMinutes: resetTtlMin(),
     });
     return { ok: true, resetToken, email: e };
   });
 }
 
 async function resetPassword({ token, newPassword }) {
-  if (!db.hasDatabase()) throw new Error('Email authentication requires PostgreSQL (set DATABASE_URL).');
-  if (typeof newPassword !== 'string' || newPassword.length < 8 || newPassword.length > 200) throw new Error('Password must be 8-200 characters.');
-  if (!token || typeof token !== 'string') throw new Error('Invalid reset token.');
+  if (!db.hasDatabase()) throw new AuthError('Email authentication requires PostgreSQL (set DATABASE_URL).', 503);
+  if (typeof newPassword !== 'string' || newPassword.length < 8 || newPassword.length > 200) throw new AuthError('Password must be 8-200 characters.');
+  if (!token || typeof token !== 'string') throw new AuthError('Invalid reset token.');
 
   const tokenHash = hashToken(token);
   const pwHash = await hashPassword(newPassword);
@@ -351,9 +336,9 @@ async function resetPassword({ token, newPassword }) {
          LIMIT 1`,
         [tokenHash]
       );
-      if (!reason.rows.length) throw new Error('Invalid reset token.');
-      if (reason.rows[0].used_at) throw new Error('This reset link has already been used.');
-      throw new Error('This reset link has expired.');
+      if (!reason.rows.length) throw new AuthError('Invalid reset token.');
+      if (reason.rows[0].used_at) throw new AuthError('This reset link has already been used.');
+      throw new AuthError('This reset link has expired.');
     }
 
     const t = use.rows[0];
@@ -364,7 +349,7 @@ async function resetPassword({ token, newPassword }) {
       [pwHash, t.player_id, PROVIDER_EMAIL, t.email]
     );
     await client.query('UPDATE auth_sessions SET revoked_at = NOW() WHERE player_id = $1 AND revoked_at IS NULL', [t.player_id]);
-    return { ok: true };
+    return { ok: true, playerId: t.player_id };
   });
 }
 
@@ -397,7 +382,23 @@ async function sessionInfo(rawToken) {
   };
 }
 
+/** Delete rows nobody can use any more. Safe to run at any time and from several instances. */
+async function purgeExpired() {
+  if (!db.hasDatabase()) return { rateLimits: 0, tokens: 0, sessions: 0 };
+  const run = async (sql) => (await db.query(sql)).rowCount;
+  return {
+    rateLimits: await run("DELETE FROM auth_rate_limits WHERE window_start < NOW() - INTERVAL '1 day'"),
+    tokens: await run("DELETE FROM auth_email_tokens WHERE expires_at < NOW() - INTERVAL '7 days' OR used_at < NOW() - INTERVAL '7 days'"),
+    // rows without expires_at are legacy anonymous sessions: kept
+    sessions: await run("DELETE FROM auth_sessions WHERE (expires_at IS NOT NULL AND expires_at < NOW() - INTERVAL '7 days') OR revoked_at < NOW() - INTERVAL '30 days'"),
+  };
+}
+
 module.exports = {
+  AuthError,
+  normEmail,
+  sessionTtlDays,
+  purgeExpired,
   registerEmail,
   checkUsernameAvailability,
   loginEmail,
@@ -408,7 +409,6 @@ module.exports = {
   revokeSession,
   revokeAllSessionsForCurrent,
   revokeAllSessionsForPlayer,
-  issueWebSocketTokenFromSession,
   readSessionFromCookie,
   sessionInfo,
 };

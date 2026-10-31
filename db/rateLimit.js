@@ -9,6 +9,7 @@ function nowMs() { return Date.now(); }
 function hitMemory(scope, key, limit, windowMs) {
   const k = `${scope}:${key}`;
   const now = nowMs();
+  if (mem.size > 5000) for (const [key, v] of mem) if (now >= v.resetAt) mem.delete(key); // keep the in-memory table from growing forever
   const entry = mem.get(k);
   if (!entry || now >= entry.resetAt) {
     mem.set(k, { count: 1, resetAt: now + windowMs });
@@ -23,7 +24,7 @@ async function hitDb(scope, key, limit, windowMs) {
   const windowSeconds = Math.max(1, Math.ceil(windowMs / 1000));
   const sql = `
     WITH bucket AS (
-      SELECT to_timestamp(floor(extract(epoch FROM NOW()) / $4) * $4) AS ws
+      SELECT to_timestamp(floor(extract(epoch FROM NOW()) / $3::int) * $3::int) AS ws
     ),
     up AS (
       INSERT INTO auth_rate_limits(scope, key, window_start, count)
@@ -33,10 +34,10 @@ async function hitDb(scope, key, limit, windowMs) {
       RETURNING count, window_start
     )
     SELECT count,
-           GREATEST(0, ($4 - extract(epoch FROM (NOW() - window_start)))::int) AS reset_seconds
+           GREATEST(0, ($3::int - extract(epoch FROM (NOW() - window_start)))::int) AS reset_seconds
     FROM up`;
 
-  const r = await db.query(sql, [scope, key, limit, windowSeconds]);
+  const r = await db.query(sql, [scope, key, windowSeconds]); // every parameter must be used by the SQL, or PostgreSQL cannot type it
   const row = r.rows[0] || { count: 1, reset_seconds: windowSeconds };
   const count = Number(row.count) || 1;
   const allowed = count <= limit;

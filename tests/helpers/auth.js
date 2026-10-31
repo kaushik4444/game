@@ -1,54 +1,59 @@
 'use strict';
-const crypto = require('node:crypto');
+/** A tiny cookie-keeping HTTP client that behaves like a browser against /api/auth (cookies in, CSRF header out). */
+class Browser {
+  constructor(port) { this.port = port; this.cookies = new Map(); this.lastSetCookie = []; }
 
-async function parseJson(r) {
-  return r.json().catch(() => ({}));
-}
-
-async function getCsrf(port) {
-  const r = await fetch(`http://127.0.0.1:${port}/api/auth/csrf`);
-  const json = await parseJson(r);
-  if (!r.ok || json.ok === false || !json.csrfToken) throw new Error('Could not fetch CSRF token');
-  const cookie = r.headers.get('set-cookie') || '';
-  return { csrfToken: json.csrfToken, cookie };
-}
-
-async function post(port, path, body, opts = {}) {
-  const headers = { 'content-type': 'application/json' };
-  if (opts.csrfToken) headers['x-csrf-token'] = opts.csrfToken;
-  if (opts.cookie) headers.cookie = opts.cookie;
-  const r = await fetch(`http://127.0.0.1:${port}${path}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(Object.assign({}, body || {}, opts.csrfToken ? { csrfToken: opts.csrfToken } : {})),
-  });
-  const json = await parseJson(r);
-  if (!r.ok || json.ok === false) {
-    throw new Error((json && json.error) || `HTTP ${r.status} ${path}`);
-  }
-  return { json, headers: r.headers, cookie: r.headers.get('set-cookie') || opts.cookie || '' };
-}
-
-async function registerAndVerify(port, { email, username, password = 'TestPass123!', displayName = 'Player', avatar = '🧙' }) {
-  try {
-    const handle = (username || String(displayName || 'player').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 18) || 'player') + String(Math.floor(Math.random() * 100000));
-    const csrf = await getCsrf(port);
-    const reg = await post(port, '/api/auth/register', { email, username: handle.slice(0, 24), password, displayName, avatar }, csrf);
-    const verifyToken = reg.json && reg.json.debug && reg.json.debug.verifyToken;
-    if (!verifyToken) throw new Error('Missing debug verify token in test mode');
-    await post(port, '/api/auth/verify-email', { token: verifyToken }, { csrfToken: csrf.csrfToken, cookie: reg.cookie || csrf.cookie });
-    const login = await post(port, '/api/auth/login', { email, password }, { csrfToken: csrf.csrfToken, cookie: reg.cookie || csrf.cookie });
-    const ws = await post(port, '/api/auth/ws-token', {}, { csrfToken: csrf.csrfToken, cookie: login.cookie || reg.cookie || csrf.cookie });
-    return { token: ws.json.token, player: login.json.player, cookie: login.cookie || reg.cookie || csrf.cookie, csrfToken: csrf.csrfToken };
-  } catch (err) {
-    // In-memory test mode has no email/password auth; create a local anonymous session token.
-    if (/requires PostgreSQL|Registration failed/i.test(String(err.message || ''))) {
-      const dbPlayers = require('../../db/players');
-      const created = await dbPlayers.createAnonymousPlayer({ displayName, avatar });
-      return { token: created.rawToken, player: created.player, cookie: '', csrfToken: crypto.randomBytes(12).toString('hex') };
+  absorb(res) {
+    this.lastSetCookie = res.headers.getSetCookie ? res.headers.getSetCookie() : [];
+    for (const line of this.lastSetCookie) {
+      const [pair] = line.split(';');
+      const i = pair.indexOf('=');
+      const name = pair.slice(0, i); const value = pair.slice(i + 1);
+      if (/Max-Age=0/i.test(line) || !value) this.cookies.delete(name); else this.cookies.set(name, value);
     }
-    throw err;
   }
+  get cookieHeader() { return [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; '); }
+
+  async request(method, path, body, { csrf = true, headers = {} } = {}) {
+    const h = { ...headers };
+    if (this.cookies.size) h.cookie = this.cookieHeader;
+    if (method === 'POST') h['content-type'] = 'application/json';
+    if (csrf && this.cookies.has('ct_csrf') && h['x-csrf-token'] === undefined) h['x-csrf-token'] = this.cookies.get('ct_csrf');
+    const res = await fetch(`http://127.0.0.1:${this.port}${path}`, { method, headers: h, body: method === 'POST' ? JSON.stringify(body || {}) : undefined });
+    this.absorb(res);
+    const json = await res.json().catch(() => ({}));
+    return { status: res.status, ok: res.ok && json.ok !== false, json, headers: res.headers, setCookie: this.lastSetCookie };
+  }
+  get(path, opts) { return this.request('GET', path, null, opts); }
+  post(path, body, opts) { return this.request('POST', path, body, opts); }
+  /** Like post, but throws with the server's message when the call fails. */
+  async must(path, body, opts) {
+    const r = await this.post(path, body, opts);
+    if (!r.ok) throw new Error(`${path}: ${r.json.error || 'HTTP ' + r.status}`);
+    return r;
+  }
+  async csrf() { return (await this.get('/api/auth/csrf')).json.csrfToken; }
 }
 
-module.exports = { post, registerAndVerify, getCsrf };
+/**
+ * Registers, verifies and logs in. Returns { browser, token, player }. `token` is the session token that only NODE_ENV=test
+ * responses contain: it is for test clients that are not browsers. In memory mode (no PostgreSQL) the email flow does not
+ * exist, so an anonymous player is created instead; ONLY that specific "requires PostgreSQL" answer triggers the fallback.
+ */
+async function registerAndVerify(port, { email, username, password = 'TestPass123!', displayName = 'Player', avatar = '🧙' }) {
+  const browser = new Browser(port);
+  await browser.csrf();
+  const handle = ((username || String(displayName || 'player').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 18) || 'player') + Math.floor(Math.random() * 100000)).slice(0, 24);
+  const reg = await browser.post('/api/auth/register', { email, username: handle, password, displayName, avatar });
+  if (reg.status === 503 && /requires PostgreSQL/i.test(reg.json.error || '')) {
+    const dbPlayers = require('../../db/players');
+    const created = await dbPlayers.createAnonymousPlayer({ displayName, avatar });
+    return { browser, token: created.rawToken, player: created.player };
+  }
+  if (!reg.ok) throw new Error(`register failed: ${reg.json.error || reg.status}`);
+  await browser.must('/api/auth/verify-email', { token: reg.json.debug.verifyToken });
+  const login = await browser.must('/api/auth/login', { email, password });
+  return { browser, token: login.json.token, player: login.json.player };
+}
+
+module.exports = { Browser, registerAndVerify };

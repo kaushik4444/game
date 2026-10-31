@@ -20,3 +20,14 @@ services:
       # Optional site-wide notice shown as a dismissible banner on the home screen. Leave empty for none.
       - key: ANNOUNCEMENT
         sync: false
+      # Transactional email (verification and password reset). REQUIRED in production: the server refuses to start without them.
+      - key: EMAIL_PROVIDER
+        value: resend
+      - key: EMAIL_FROM
+        sync: false # e.g. Tableverse <noreply@your-domain>
+      - key: PUBLIC_APP_URL
+        sync: false # e.g. https://tableverse.onrender.com (used in email links, no trailing slash)
+      - key: RESEND_API_KEY
+        sync: false
+      # Optional: where the match-result spool lives (put it on a persistent disk if you have one)
+      # - key: MATCH_SPOOL_DIR
