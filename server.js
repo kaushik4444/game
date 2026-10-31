@@ -616,6 +616,20 @@ function start(opts = {}) {
       broadcast(room);
     },
 
+    // Profile statistics for the asking player only (nobody can request somebody else's)
+    getStats(p) {
+      const now = Date.now();
+      if (p.statsAt && now - p.statsAt < 1000) return;
+      p.statsAt = now;
+      dbMatches.getPlayerProfile(p.id, { memberSince: p.createdAt }).then(
+        (stats) => send(p.ws, { t: 'stats', stats }),
+        (err) => {
+          console.error('[server] stats failed:', err.message);
+          sendError(p, 'Stats are unavailable right now');
+        }
+      );
+    },
+
     setVisibility(p, msg) {
       const room = hostRoom(p, 'lobby');
       if (!room) return;
@@ -770,6 +784,7 @@ function start(opts = {}) {
           token: msg.token,
           name: dbPlayer.display_name,
           avatar: dbPlayer.avatar,
+          createdAt: dbPlayer.created_at,
           room: null,
           ws: null,
           connected: false,
@@ -797,6 +812,7 @@ function start(opts = {}) {
         token: bearerToken,
         name: created.player.display_name,
         avatar: created.player.avatar,
+        createdAt: created.player.created_at,
         room: null,
         ws: null,
         connected: false,

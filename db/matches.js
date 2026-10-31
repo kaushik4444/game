@@ -1,5 +1,6 @@
 'use strict';
 const db = require('./pool');
+const { computeProfile } = require('./stats');
 
 /**
  * In-memory fallback match archive used when DATABASE_URL is not configured.
@@ -26,6 +27,15 @@ class MemoryMatchStore {
       }
     }
     return { played, wins, losses: played - wins };
+  }
+
+  async getPlayerRows(playerId) {
+    const rows = [];
+    for (const m of this.matches) {
+      const part = m.participants.find((p) => p.playerId === playerId);
+      if (part && !part.leftEarly && !part.isBot) rows.push({ gameId: m.gameId, finishedAt: m.recordedAt, isWinner: part.isWinner, score: part.score });
+    }
+    return rows.sort((a, b) => b.finishedAt - a.finishedAt);
   }
 }
 
@@ -111,7 +121,31 @@ async function getPlayerStats(playerId) {
   }
 }
 
+/**
+ * Profile statistics for one player: games played, wins, losses, win rate, favourite game, per-game record,
+ * streaks and recent results. Throws if the database fails (a zero would be misleading).
+ */
+async function getPlayerProfile(playerId, { memberSince = null } = {}) {
+  let rows;
+  if (!db.hasDatabase()) {
+    rows = await memoryStore.getPlayerRows(playerId);
+  } else {
+    const res = await db.query(
+      `SELECT m.game_id, m.finished_at, mp.is_winner, mp.score
+       FROM match_participants mp
+       JOIN matches m ON m.id = mp.match_id
+       WHERE mp.player_id = $1 AND mp.left_early = FALSE AND mp.is_bot = FALSE
+       ORDER BY m.finished_at DESC
+       LIMIT 5000`,
+      [playerId]
+    );
+    rows = res.rows.map((r) => ({ gameId: r.game_id, finishedAt: r.finished_at, isWinner: r.is_winner, score: r.score }));
+  }
+  return computeProfile(rows, { memberSince });
+}
+
 module.exports = {
   recordMatch,
+  getPlayerProfile,
   getPlayerStats,
 };

@@ -372,3 +372,27 @@ select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .start-bar.wait { background: linear-gradient(to top, #0b0d1f 70%, rgba(11, 13, 31, 0)); }
 @media (max-width: 520px) { .rejoin-banner { flex-wrap: wrap; } .rejoin-banner .btn { width: 100%; } }
 @media (prefers-reduced-motion: reduce) { .rejoin-banner { animation: none; } }
+
+/* player stats */
+.stats-open { margin-top: 12px; width: 100%; }
+.stats-sheet { max-width: 620px; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+.stat-tile { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 14px; background: rgba(255,255,255,.05); border: 1px solid var(--panel-line); min-width: 0; }
+.stat-tile.wide { grid-column: span 2; }
+.stat-tile.good .stat-v { color: var(--gold); }
+.stat-v { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.stat-l { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.stat-h { margin: 16px 0 8px; font-size: 14px; letter-spacing: .04em; }
+.stat-h small { color: var(--muted); font-weight: 400; }
+.stat-games { display: grid; gap: 8px; }
+.stat-game { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: center; padding: 8px 10px; border-radius: 12px; background: rgba(255,255,255,.04); }
+.stat-game-rec { color: var(--muted); font-size: 12px; text-align: right; }
+.stat-bar { grid-column: 1 / 2; height: 6px; border-radius: 99px; background: rgba(255,255,255,.1); overflow: hidden; }
+.stat-bar i { display: block; height: 100%; background: var(--gold); border-radius: 99px; }
+.stat-game-pct { font-weight: 700; font-size: 13px; text-align: right; }
+.stat-game-best { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+.stat-recent { display: flex; flex-wrap: wrap; gap: 6px; }
+.stat-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 10px; font-size: 14px; background: rgba(255,255,255,.06); }
+.stat-chip b { font-size: 12px; }
+.stat-chip.w { box-shadow: inset 0 0 0 1px rgba(120,220,150,.6); } .stat-chip.w b { color: #7fe3a0; }
+.stat-chip.l { box-shadow: inset 0 0 0 1px rgba(240,120,120,.45); } .stat-chip.l b { color: #f2908f; }

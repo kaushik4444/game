@@ -239,6 +239,9 @@
         render();
         break;
       }
+      case 'stats':
+        drawStats(m.stats);
+        break;
       case 'tables':
         S.publicTables = m.tables || [];
         S.rejoin = m.rejoin || [];
@@ -582,6 +585,7 @@
         <section class="panel profile-panel">
           <div class="panel-tag">PLAYER IDENTITY</div>
           ${profileHTML()}
+          <button type="button" class="btn ghost stats-open" data-act="stats">📊 My stats</button>
         </section>
         <section class="panel join-panel">
           <div class="panel-tag">QUICK ACCESS</div>
@@ -695,6 +699,54 @@
     </main>`;
   }
 
+  // ------------------------------------------------------------ player stats
+  const statsGame = (id) => gameMeta(id) || { name: id, icon: '🎴' };
+  const BEST_LABEL = { wizard: 'Best score', twentynine: 'Best team score', poker: 'Biggest stack', themind: 'Furthest level' };
+  const fmtDate = (iso) => { try { return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return ''; } };
+
+  function openStats() {
+    const old = document.getElementById('stats-overlay');
+    if (old) old.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'stats-overlay';
+    overlay.className = 'overlay';
+    overlay.innerHTML = '<div class="sheet stats-sheet" data-stop="1" role="dialog" aria-label="My stats"><div class="row" style="justify-content:space-between"><h2>📊 My stats</h2><button class="btn ghost small" data-stats-close>Close</button></div><div class="stats-body"><p class="hint">Loading…</p></div></div>';
+    overlay.addEventListener('click', (e) => { if (e.target === overlay || e.target.closest('[data-stats-close]')) overlay.remove(); });
+    document.body.appendChild(overlay);
+    send({ t: 'getStats' });
+  }
+
+  function drawStats(s) {
+    const body = document.querySelector('#stats-overlay .stats-body');
+    if (!body || !s) return;
+    if (!s.played) {
+      body.innerHTML = '<p class="hint" style="text-align:left">No finished games yet. Finish a game with friends or bots and your record shows up here. Games you leave early do not count.</p>';
+      return;
+    }
+    const fav = s.favouriteGame ? statsGame(s.favouriteGame) : null;
+    const tile = (label, value, cls = '') => `<div class="stat-tile ${cls}"><span class="stat-v">${value}</span><span class="stat-l">${label}</span></div>`;
+    const games = s.perGame.map((g) => {
+      const meta = statsGame(g.gameId);
+      return `<div class="stat-game"><span class="stat-game-name">${esc(meta.icon || '🎴')} ${esc(meta.name)}</span><span class="stat-game-rec">${g.wins}W · ${g.losses}L</span><span class="stat-bar" aria-hidden="true"><i style="width:${g.winRate || 0}%"></i></span><span class="stat-game-pct">${g.winRate}%</span>${g.best !== null ? `<span class="stat-game-best">${esc(BEST_LABEL[g.gameId] || 'Best score')}: <b>${g.best}</b></span>` : ''}</div>`;
+    }).join('');
+    const recent = s.recent.map((r) => `<span class="stat-chip ${r.won ? 'w' : 'l'}" title="${esc(statsGame(r.gameId).name)} · ${esc(fmtDate(r.finishedAt))}">${esc(statsGame(r.gameId).icon || '🎴')}<b>${r.won ? 'W' : 'L'}</b></span>`).join('');
+    body.innerHTML = `
+      <div class="stat-grid">
+        ${tile('Games played', s.played)}
+        ${tile('Wins', s.wins, 'good')}
+        ${tile('Losses', s.losses)}
+        ${tile('Win rate', s.winRate + '%')}
+        ${tile('Favourite game', fav ? `${esc(fav.icon || '🎴')} ${esc(fav.name)}` : '–', 'wide')}
+        ${tile('Win streak', s.streak.current)}
+        ${tile('Best streak', s.streak.best)}
+      </div>
+      <h3 class="stat-h">By game</h3>
+      <div class="stat-games">${games}</div>
+      <h3 class="stat-h">Last ${s.recent.length} games <small>(newest first)</small></h3>
+      <div class="stat-recent">${recent}</div>
+      <p class="hint" style="text-align:left;margin-top:12px">${s.lastPlayed ? `Last played ${esc(fmtDate(s.lastPlayed))}. ` : ''}${s.memberSince ? `Playing since ${esc(fmtDate(s.memberSince))}. ` : ''}Your stats belong to the player saved in this browser, so clearing site data starts a new player.</p>`;
+  }
+
   function openActivityLog() {
     const entries = (S.view && S.view.log) || [];
     const overlay = document.createElement('div');
@@ -749,6 +801,7 @@
       render();
     },
     toggleAvatars: () => { S.avatarOpen = !S.avatarOpen; render(); },
+    stats: () => openStats(),
     emotes: () => toggleEmoteBar(),
     activityLog: () => openActivityLog(),
     sound: () => { CardTable.sound.toggle(); render(); },
