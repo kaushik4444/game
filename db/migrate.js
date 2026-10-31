@@ -11,17 +11,6 @@ async function migrate() {
     return { applied: [] };
   }
 
-  // Ensure migrations tracking table exists
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-      version VARCHAR(64) PRIMARY KEY,
-      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
-
-  const appliedRes = await db.query('SELECT version FROM schema_migrations ORDER BY version ASC');
-  const applied = new Set(appliedRes.rows.map((r) => r.version));
-
   const files = fs
     .readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith('.sql'))
@@ -29,20 +18,29 @@ async function migrate() {
 
   const newlyApplied = [];
 
-  for (const file of files) {
-    if (applied.has(file)) continue;
+  // One transaction holding an advisory lock: two instances starting together cannot race, and a failing
+  // migration leaves the database exactly as it was.
+  await db.withTransaction(async (client) => {
+    await client.query('SELECT pg_advisory_xact_lock(727274)');
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version VARCHAR(64) PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    const appliedRes = await client.query('SELECT version FROM schema_migrations ORDER BY version ASC');
+    const applied = new Set(appliedRes.rows.map((r) => r.version));
 
-    console.log(`[db:migrate] Applying migration: ${file}...`);
-    const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
-
-    await db.withTransaction(async (client) => {
+    for (const file of files) {
+      if (applied.has(file)) continue;
+      console.log(`[db:migrate] Applying migration: ${file}...`);
+      const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
       await client.query(sql);
       await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [file]);
-    });
-
-    console.log(`[db:migrate] Applied: ${file}`);
-    newlyApplied.push(file);
-  }
+      console.log(`[db:migrate] Applied: ${file}`);
+      newlyApplied.push(file);
+    }
+  });
 
   if (newlyApplied.length === 0) {
     console.log('[db:migrate] Database schema is up to date.');

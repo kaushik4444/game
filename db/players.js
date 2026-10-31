@@ -92,19 +92,16 @@ async function authenticateToken(rawToken) {
     LIMIT 1;
   `;
 
-  try {
-    const res = await db.query(sql, [tokenHash]);
-    if (res.rows.length === 0) return null;
+  // A database failure must not look like "unknown token": the caller would then create a brand-new
+  // identity for a returning player. So errors are thrown (null means the token is really invalid).
+  const res = await db.query(sql, [tokenHash]);
+  if (res.rows.length === 0) return null;
 
-    const player = res.rows[0];
-    // Asynchronously update last_seen_at without blocking auth flow
-    db.query('UPDATE players SET last_seen_at = NOW() WHERE id = $1', [player.id]).catch(() => {});
+  const player = res.rows[0];
+  // Asynchronously update last_seen_at without blocking auth flow
+  db.query('UPDATE players SET last_seen_at = NOW() WHERE id = $1', [player.id]).catch(() => {});
 
-    return player;
-  } catch (err) {
-    console.error('[db:players] Error authenticating token:', err.message);
-    return null;
-  }
+  return player;
 }
 
 /**
@@ -123,7 +120,7 @@ async function createAnonymousPlayer({ displayName, avatar }) {
       `INSERT INTO players (display_name, avatar, is_anonymous)
        VALUES ($1, $2, TRUE)
        RETURNING id, username, display_name, avatar, is_anonymous, created_at, last_seen_at`,
-      [displayName || 'Guest', avatar || '🧙']
+      [String(displayName || 'Guest').slice(0, 32), avatar || '🧙']
     );
 
     const player = playerRes.rows[0];

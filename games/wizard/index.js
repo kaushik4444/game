@@ -65,6 +65,11 @@ module.exports = {
       stamp: () => g.lastTrick, // changes whenever a trick is completed
       autoAction: () => (g.phase === 'roundEnd' ? { type: 'continue' } : null),
       isOver: () => g.phase === 'gameOver',
+      // final result per seat, in seat order: used for match history and stats
+      results: () => {
+        const best = Math.max(...g.players.map((p) => p.score));
+        return g.players.map((p) => ({ score: p.score, winner: p.score === best }));
+      },
     };
   },
 };

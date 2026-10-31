@@ -74,6 +74,11 @@ module.exports = {
       botAction: (playerId) => engine.botAction(g, playerId),
       autoAction: () => (g.phase === 'handEnd' ? { type: 'continue' } : g.phase === 'runout' ? { type: 'deal' } : null),
       isOver: () => g.phase === 'gameOver',
+      // chips at the end; the biggest stack wins (ties share the win)
+      results: () => players.map((_, i) => {
+        const s = (g.standings || []).find((o) => o.player === i);
+        return { score: s ? s.chips : g.players[i].chips, winner: !!s && s.rank === 1 };
+      }),
     };
   },
 };

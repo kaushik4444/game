@@ -44,6 +44,8 @@ module.exports = {
       stamp: () => g.lastTrick, // changes whenever a trick is completed
       autoAction: () => (g.phase === 'handEnd' ? { type: 'continue' } : null),
       isOver: () => g.phase === 'gameOver',
+      // teams are the even and the odd seats (seat % 2); every member of the winning team wins
+      results: () => players.map((_, i) => ({ score: g.teamScore[i % 2], winner: g.winnerTeam === i % 2 })),
     };
   },
 };

@@ -89,6 +89,8 @@ module.exports = {
       botDelayMs: (playerId) => delayFor(playerId),
       autoAction: () => null,
       isOver: () => g.phase === 'gameOver',
+      // cooperative: the whole team wins or loses together; score = levels cleared
+      results: () => players.map(() => ({ score: g.stats.cleared, winner: g.won })),
     };
   },
 };

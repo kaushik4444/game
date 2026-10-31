@@ -4,10 +4,10 @@
   "description": "Tableverse \u2014 Your friends. Your games. One table.",
   "main": "server.js",
   "scripts": {
-    "build": "node --check server.js && node --check public/app.js && node --check db/pool.js && node --check db/players.js && node --check db/matches.js && node --check db/migrate.js",
+    "build": "node --check server.js && node --check public/app.js && node --check db/pool.js && node --check db/players.js && node --check db/matches.js && node --check db/migrate.js && node --check db/startup.js && node --check db/matchRecord.js",
     "start": "node server.js",
     "migrate": "node db/migrate.js",
-    "test": "node tests/engine.test.js && node tests/twentynine.test.js && node tests/poker.test.js && node tests/themind.test.js && node tests/db.test.js && node tests/smoke.test.js"
+    "test": "node tests/engine.test.js && node tests/twentynine.test.js && node tests/poker.test.js && node tests/themind.test.js && node tests/results.test.js && node tests/db.test.js && node tests/production.test.js && node tests/smoke.test.js"
   },
   "dependencies": {
     "pg": "^8.13.1",

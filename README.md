@@ -16,18 +16,21 @@ Bots can fill any open seat.
 Tableverse uses PostgreSQL (Neon, Supabase, or self-hosted) for persistent player accounts, sessions, and match history:
 
 - **Environment Configuration**: Set `DATABASE_URL` in your environment (e.g. `postgresql://user:pass@ep-xyz.neon.tech/neondb?sslmode=require`).
-- **Zero-config Fallback**: If `DATABASE_URL` is omitted, Tableverse automatically runs with an in-memory repository for local development and offline test execution.
+- **Zero-config Fallback (development and tests only)**: If `DATABASE_URL` is omitted and `NODE_ENV` is not `production`, Tableverse runs with an in-memory repository.
+- **Production is strict**: with `NODE_ENV=production` the server **exits with an error** if `DATABASE_URL` is missing, the `pg` package is not installed, the database cannot be reached, or a migration fails. It checks the database and migrates *before* it accepts any player.
+- **Health checks**: `/healthz` is liveness (the process is up). `/readyz` also checks the database (503 if it is down).
 - **Migrations**: Automated version-controlled SQL migrations located in `db/migrations/`. Run manually via:
   ```bash
   npm run migrate
   ```
-  Or automatically applied when the server boots.
+  They are also applied when the server boots, in one transaction under an advisory lock (two instances cannot race, and a failed migration changes nothing).
 - **Anonymous Player Accounts**: Guests are automatically provisioned with permanent internal UUIDs and bearer tokens hashed with SHA-256 before storage.
-- **Completed Match Archive**: Every completed game is saved to the `matches` and `match_participants` tables with player scores and winner tracking.
+- **Completed Match Archive**: Every completed game is saved once (a per-game key makes recording idempotent) to `matches` and `match_participants`. Each game reports per-seat `results()` (score and winner): Wizard highest score, 29 the winning team, Poker the biggest stack, The Mind win/lose together. A player who left mid-game (a bot finished their seat) is kept in the record but not counted in stats.
+- **Abuse limits**: per-address caps on open sockets (40) and new accounts per hour (30), a site-wide cap on new accounts per minute (120) and on players in memory (5000), and WebSocket upgrades from other websites (foreign `Origin`) are refused. Add extra allowed origins with `ALLOWED_ORIGINS`. Behind Render's proxy set `TRUST_PROXY=1` (done in `render.yaml`).
 - **Announcement banner**: set the `ANNOUNCEMENT` environment variable (max 200 characters, plain text) to show a dismissible 📣 notice on the home screen. Changing the text shows it again to players who dismissed the old one; unset it to remove the banner.
 - **Render Deployment**:
   1. Create a Web Service connected to your repository.
-  2. Set `DATABASE_URL` in the Render Environment Variables tab pointing to your Neon database.
+  2. Set `DATABASE_URL` in the Render Environment Variables tab pointing to your Neon database (required: the deploy fails without it). `render.yaml` also sets `NODE_ENV=production` and `TRUST_PROXY=1`.
   3. Build Command: `npm install`
   4. Start Command: `npm start`
   5. Optional: set `ANNOUNCEMENT` to show a site-wide banner. `render.yaml` (service `tableverse`) declares both variables.
