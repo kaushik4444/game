@@ -9,8 +9,11 @@ const dbPool = require('./db/pool');
 const { prepareDatabase } = require('./db/startup');
 const { buildMatchRecord } = require('./db/matchRecord');
 const dbPlayers = require('./db/players');
+const dbAuth = require('./db/auth');
 const dbMatches = require('./db/matches');
 const { createMatchQueue, defaultSpoolDir } = require('./db/matchQueue');
+const { makeAuthEmailSender } = require('./lib/email');
+const { createAuthRoutes } = require('./lib/authRoutes');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = {
@@ -80,13 +83,63 @@ function start(opts = {}) {
   const players = new Map(); // id -> player
   const tokens = new Map(); // secret token -> player
   const rooms = new Map(); // code -> room
+  let purgeTimer = null;
 
   // ------------------------------------------------------------ http
-  const server = http.createServer((req, res) => {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405, { Allow: 'GET, HEAD' });
-      return res.end();
-    }
+  const readJsonBody = (req) =>
+    new Promise((resolve, reject) => {
+      let size = 0;
+      let text = '';
+      req.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > 64 * 1024) {
+          reject(new Error('payload too large'));
+          req.destroy();
+          return;
+        }
+        text += chunk.toString('utf8');
+      });
+      req.on('end', () => {
+        if (!text) return resolve({});
+        try {
+          resolve(JSON.parse(text));
+        } catch {
+          reject(new Error('invalid json'));
+        }
+      });
+      req.on('error', reject);
+    });
+
+  const setCommonHeaders = (res, contentType = 'application/json; charset=utf-8') => {
+    res.setHeader('Content-Type', contentType);
+    for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
+    if (production) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  };
+
+  const sendJson = (res, status, body) => {
+    setCommonHeaders(res);
+    res.writeHead(status);
+    res.end(JSON.stringify(body));
+  };
+
+  const includeDebugTokens = env.NODE_ENV === 'test'; // only tests receive raw tokens in responses (they are not browsers)
+  const emailSender = opts.emailSender || makeAuthEmailSender({ env, logger: opts.log || console });
+  const authRoutes = createAuthRoutes({
+    env,
+    production,
+    trustProxy,
+    emailSender,
+    sendJson,
+    readJsonBody,
+    log: opts.log || console,
+    // a signed-out or reset account must not keep playing on an already open socket
+    onSignedOut: ({ playerId, token }) => {
+      const p = players.get(playerId);
+      if (p && p.ws && (!token || p.token === token)) p.ws.close(4001, 'signed out');
+    },
+  });
+
+  const server = http.createServer(async (req, res) => {
     let rel;
     try {
       rel = decodeURIComponent(new URL(req.url, 'http://x').pathname);
@@ -94,18 +147,29 @@ function start(opts = {}) {
       res.writeHead(400);
       return res.end();
     }
+
+    if (await authRoutes.handle(req, res, rel)) return;
+
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { Allow: 'GET, HEAD, POST' });
+      return res.end();
+    }
+
     if (rel === '/healthz') {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('ok');
     }
     if (rel === '/readyz') {
-      // readiness: the process is up AND the database answers (liveness is /healthz)
       const ok = (text) => { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end(text); };
       const q = matchQueue.stats();
       const tail = q.pending || q.failed ? ` (matches: ${q.pending} pending, ${q.failed} failed)` : '';
       if (!dbPool.hasDatabase()) ok('ready (in-memory store)' + tail);
       else dbPool.ping().then(() => ok('ready' + tail), () => { res.writeHead(503, { 'Content-Type': 'text/plain' }); res.end('database unavailable'); });
       return;
+    }
+    // Public snapshot for visitors: the home page shows the game list and the table directory without a session or a socket.
+    if (rel === '/api/games') {
+      return sendJson(res, 200, { ok: true, games: games.list(), tables: publicTables(), announcement });
     }
     if (rel.includes('\0')) {
       res.writeHead(400);
@@ -787,16 +851,20 @@ function start(opts = {}) {
 
   async function handleHello(ws, msg) {
     if (ws.readyState !== 1) return; // the socket closed while waiting in the queue
-    let p = typeof msg.token === 'string' ? tokens.get(msg.token) : null;
-    let bearerToken = msg.token;
 
-    if (!p && typeof msg.token === 'string') {
-      // Check database / persistent store
-      const dbPlayer = await dbPlayers.authenticateToken(msg.token);
+    const presentedToken = (msg && typeof msg.token === 'string' && msg.token) || ws.cookieToken || null;
+    if (!presentedToken) {
+      send(ws, { t: 'authRequired', message: 'Please log in to play.' });
+      return ws.close(1008, 'auth required');
+    }
+
+    let p = tokens.get(presentedToken) || null;
+    if (!p) {
+      const dbPlayer = await dbPlayers.authenticateToken(presentedToken);
       if (dbPlayer) {
         p = {
           id: dbPlayer.id,
-          token: msg.token,
+          token: presentedToken,
           name: dbPlayer.display_name,
           avatar: dbPlayer.avatar,
           createdAt: dbPlayer.created_at,
@@ -811,31 +879,16 @@ function start(opts = {}) {
     }
 
     if (!p) {
-      // Create new anonymous player account (limited: every account is a database row)
-      if (!allowNewAccount(ws.ip)) {
-        send(ws, { t: 'error', message: 'Too many new players right now, please try again in a few minutes' });
-        return ws.close(1013, 'busy');
-      }
-      const created = await dbPlayers.createAnonymousPlayer({
-        displayName: cleanName(msg.name) || 'Guest ' + (100 + crypto.randomInt(900)),
-        avatar: AVATARS.includes(msg.avatar) ? msg.avatar : pick(AVATARS),
-      });
-
-      bearerToken = created.rawToken;
-      p = {
-        id: created.player.id,
-        token: bearerToken,
-        name: created.player.display_name,
-        avatar: created.player.avatar,
-        createdAt: created.player.created_at,
-        room: null,
-        ws: null,
-        connected: false,
-        lastSeen: Date.now(),
-      };
-      players.set(p.id, p);
-      tokens.set(p.token, p);
+      send(ws, { t: 'authRequired', message: 'Your session is invalid or expired. Please log in again.' });
+      return ws.close(1008, 'invalid session');
     }
+
+    const auth = await dbAuth.sessionInfo(p.token);
+    if (dbPool.hasDatabase() && !auth.emailVerified) {
+      send(ws, { t: 'authRequired', message: 'Please verify your email before entering the lobby.' });
+      return ws.close(1008, 'email verification required');
+    }
+
     if (p.ws && p.ws !== ws) {
       p.ws.player = null;
       p.ws.close(4000, 'replaced');
@@ -843,8 +896,7 @@ function start(opts = {}) {
     p.ws = ws;
     p.connected = true;
     ws.player = p;
-    applyProfile(p, msg);
-    send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables(), rejoin: rejoinFor(p), announcement });
+    send(ws, { t: 'welcome', id: p.id, token: includeDebugTokens ? p.token : undefined, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables(), rejoin: rejoinFor(p), announcement });
     clearTimeout(p.dropTimer);
     const room = rooms.get(p.room);
     if (room) {
@@ -861,6 +913,7 @@ function start(opts = {}) {
 
   wss.on('connection', (ws, req) => {
     ws.ip = clientIp(req);
+    ws.cookieToken = authRoutes.readSessionToken(req);
     const open = (socketsByIp.get(ws.ip) || 0) + 1;
     socketsByIp.set(ws.ip, open);
     ws.once('close', () => {
@@ -971,6 +1024,7 @@ function start(opts = {}) {
   async function close({ drainMs = 0 } = {}) {
     clearInterval(ticker);
     clearInterval(gc);
+    clearInterval(purgeTimer);
     if (drainMs) await matchQueue.drain(drainMs); // let pending match writes finish (shutdown)
     matchQueue.close();
     for (const room of rooms.values()) clearTimeout(room.timer);
@@ -981,7 +1035,15 @@ function start(opts = {}) {
   // Verify the database and run migrations BEFORE accepting anybody. Any failure rejects start(): the process must not
   // serve players on a database it cannot use (and in production it must not silently fall back to memory).
   return database.prepare().then((info) => {
-    if (info && info.mode === 'postgres') matchQueue.replaySpool(); // results a previous run could not save
+    if (production && info && info.mode === 'postgres') emailSender.assertReady();
+    if (info && info.mode === 'postgres') {
+      matchQueue.replaySpool(); // results a previous run could not save
+      // old rate-limit rows, expired sessions and used tokens: once now, then every 6 hours (best effort)
+      const purge = () => dbAuth.purgeExpired().catch((e) => (opts.log || console).error('[auth] housekeeping failed: ' + e.message));
+      purge();
+      purgeTimer = setInterval(purge, 6 * 60 * 60 * 1000);
+      purgeTimer.unref();
+    }
     return new Promise((resolve) => server.listen(port, () => resolve({ server, port: server.address().port, close, database: info, matchQueue })));
   });
 }

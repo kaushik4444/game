@@ -9,6 +9,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const WebSocket = require('ws');
+const { registerAndVerify, Browser } = require('./helpers/auth');
 const testdb = require('./helpers/testdb');
 
 let passed = 0;
@@ -30,7 +31,7 @@ const quiet = () => { const lines = { log: [], warn: [], error: [] }; return { l
 function client(port, name, token) {
   const c = { name, room: null, view: null, chats: [], notices: [], errors: [], stats: null, ws: new WebSocket(`ws://127.0.0.1:${port}/ws`) };
   c.send = (m) => c.ws.send(JSON.stringify(m));
-  c.ws.on('open', () => c.send({ t: 'hello', name, token }));
+  c.ws.on('open', () => c.send({ t: 'hello', token }));
   c.ws.on('message', (raw) => {
     const m = JSON.parse(raw);
     if (m.t === 'welcome') Object.assign(c, { id: m.id, token: m.token });
@@ -42,6 +43,16 @@ function client(port, name, token) {
   });
   c.ready = () => until(() => c.id, 'welcome ' + name);
   c.getStats = async () => { c.stats = null; await sleep(1100); c.send({ t: 'getStats' }); return until(() => c.stats, 'stats'); };
+  return c;
+}
+
+/** A WebSocket that authenticates with the session cookie only, as a browser does. */
+function cookieSocket(port, cookie) {
+  const c = { msgs: [], closed: null, ws: new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: cookie ? { cookie } : {} }) };
+  c.ws.on('open', () => c.ws.send(JSON.stringify({ t: 'hello' })));
+  c.ws.on('message', (raw) => c.msgs.push(JSON.parse(raw)));
+  c.ws.on('close', (code) => { c.closed = code; });
+  c.welcome = () => c.msgs.find((m) => m.t === 'welcome');
   return c;
 }
 
@@ -61,10 +72,18 @@ function client(port, name, token) {
     const matchesOf = (code) => q('SELECT * FROM matches WHERE room_code = $1 ORDER BY finished_at', [code]);
     const fast = { port: 0, trustProxy: false, botDelay: [0, 3], autoAdvanceMs: 20, trickPauseMs: 0, forcedMs: 0, timeScale: 0.01, absentMs: 60000, maxMsgsPerSec: Infinity, matchRetryDelays: [20, 40, 80] };
 
+    let authSeq = 1;
+    const authClient = async (srv, name) => {
+      const email = `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}.${authSeq++}@test.local`;
+      const { token } = await registerAndVerify(srv.port, { email, displayName: name, password: 'TestPass123!' });
+      const c = client(srv.port, name, token);
+      await c.ready();
+      return c;
+    };
+
     /** A short Wizard game: one human (idle, so the server's turn limit plays for them) and two bots, played to the end. */
     async function playGame(srv, name = 'Hana', extra = {}) {
-      const c = client(srv.port, name);
-      await c.ready();
+      const c = await authClient(srv, name);
       c.send({ t: 'create', gameId: 'wizard' });
       await until(() => c.room, 'table');
       c.send({ t: 'setSeats', seats: 3 });
@@ -126,14 +145,145 @@ function client(port, name, token) {
       assert.equal(r.status, 200);
       assert.match(await r.text(), /^ready/);
     });
+    console.log('authentication over HTTP');
+    const PW = 'TestPass123!';
+    const newUser = async (server, tag) => {
+      const email = `${tag}.${authSeq++}@test.local`;
+      const u = await registerAndVerify(server.port, { email, displayName: tag, password: PW });
+      return { ...u, email };
+    };
+    await test('the session is an HttpOnly cookie; CSRF needs the cookie value in the header, and a made-up matching pair is refused', async () => {
+      const u = await newUser(srv, 'Cookie');
+      const fresh = new Browser(srv.port);
+      const line = (await fresh.get('/api/auth/csrf')).setCookie.find((c) => c.startsWith('ct_csrf='));
+      assert.ok(line && !/HttpOnly/i.test(line) && /SameSite=Lax/.test(line), 'the CSRF cookie is readable by the page: ' + line);
+      const login = await u.browser.post('/api/auth/login', { email: u.email, password: PW });
+      const sess = login.setCookie.find((c) => c.startsWith('ct_session='));
+      assert.ok(/HttpOnly/.test(sess) && /SameSite=Lax/.test(sess) && /Path=\//.test(sess), sess);
+      // the attack the old check allowed: no CSRF cookie, but the same invented value in header and body
+      const made = 'a'.repeat(48);
+      const evil = await fetch(`http://127.0.0.1:${srv.port}/api/auth/logout`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': made, cookie: `ct_session=${u.token}` }, body: JSON.stringify({ csrfToken: made }) });
+      assert.equal(evil.status, 403);
+      assert.equal((await u.browser.post('/api/auth/logout', {}, { headers: { 'x-csrf-token': '0'.repeat(48) } })).status, 403, 'header differs from the cookie');
+      assert.equal((await u.browser.post('/api/auth/logout', {}, { csrf: false })).status, 403, 'no header');
+      assert.equal((await u.browser.get('/api/auth/session')).json.authenticated, true, 'every refused attempt left the session alone');
+    });
+    await test('the WebSocket works from the cookie alone; logout, logout-all and a password reset close open sockets; other accounts are unaffected', async () => {
+      const u = await newUser(srv, 'Signout');
+      const other = await newUser(srv, 'Bystander');
+      const so = cookieSocket(srv.port, other.browser.cookieHeader);
+      await until(() => so.welcome(), 'bystander welcome');
+
+      let s = cookieSocket(srv.port, u.browser.cookieHeader); // no token in hello: the cookie is enough
+      await until(() => s.welcome(), 'welcome from the cookie');
+      await u.browser.must('/api/auth/logout', {});
+      await until(() => s.closed !== null, 'socket closed by logout');
+      assert.equal(s.closed, 4001);
+      const again = cookieSocket(srv.port, 'ct_session=' + u.token); // the revoked session cannot come back
+      await until(() => again.closed !== null, 'revoked session refused');
+      assert.ok(again.msgs.some((m) => m.t === 'authRequired'));
+
+      const b = new Browser(srv.port); await b.csrf(); await b.must('/api/auth/login', { email: u.email, password: PW });
+      s = cookieSocket(srv.port, b.cookieHeader);
+      await until(() => s.welcome(), 'welcome after login');
+      await b.must('/api/auth/logout-all', {});
+      await until(() => s.closed !== null, 'socket closed by logout-all');
+      assert.equal(s.closed, 4001);
+
+      const c = new Browser(srv.port); await c.csrf(); await c.must('/api/auth/login', { email: u.email, password: PW });
+      s = cookieSocket(srv.port, c.cookieHeader);
+      await until(() => s.welcome(), 'welcome before reset');
+      const forgot = await c.must('/api/auth/forgot-password', { email: u.email });
+      await c.must('/api/auth/reset-password', { token: forgot.json.debug.resetToken, newPassword: 'NewPass123!' });
+      await until(() => s.closed !== null, 'socket closed by the password reset');
+      assert.equal(s.closed, 4001);
+      assert.equal((await c.get('/api/auth/session')).json.authenticated, false);
+
+      assert.equal(so.closed, null, 'the other account is still connected');
+      so.ws.close();
+    });
+    await test('auth rate limits work on PostgreSQL: the counter is stored, the limit answers 429 with Retry-After', async () => {
+      const rl = await start({ ...fast, matchLog: quiet(), env: { ...process.env, RL_LOGIN_EMAIL_LIMIT: '3', RL_USERNAME_IP_LIMIT: '3' } });
+      try {
+        const b = new Browser(rl.port); await b.csrf();
+        const email = `limit.${authSeq++}@test.local`;
+        const codes = [];
+        for (let i = 0; i < 4; i++) codes.push((await b.post('/api/auth/login', { email, password: 'wrong-password' })).status);
+        assert.deepEqual(codes, [401, 401, 401, 429]);
+        const blocked = await b.post('/api/auth/login', { email, password: 'wrong-password' });
+        assert.ok(Number(blocked.headers.get('retry-after')) >= 1);
+        const key = crypto.createHash('sha256').update(email).digest('hex');
+        const row = (await q("SELECT count FROM auth_rate_limits WHERE scope = 'auth:login:email' AND key = $1", [key]))[0];
+        assert.ok(row && row.count === 5, 'the counter lives in the database, so every app instance shares it');
+        const names = [];
+        for (let i = 0; i < 4; i++) names.push((await b.get('/api/auth/username-available?username=someone_' + i)).status);
+        assert.deepEqual(names, [200, 200, 200, 429], 'username lookups are limited too');
+      } finally { await rl.close(); }
+    });
+    await test('production mode: no token reaches scripts, cookies are Secure, a failed email does not strand the account, and account existence is not revealed', async () => {
+      const mail = { sent: [], failNext: 0, assertReady() {}, async sendVerification(m) { if (this.failNext-- > 0) throw new Error('provider down'); this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset(m) { if (this.failNext-- > 0) throw new Error('provider down'); this.sent.push({ kind: 'reset', ...m }); } };
+      const log = quiet();
+      const prod = await start({ ...fast, matchLog: quiet(), log, emailSender: mail, env: { ...process.env, NODE_ENV: 'production' } });
+      process.env.AUTH_SESSION_TTL_DAYS = '2';
+      try {
+        const b = new Browser(prod.port); await b.csrf();
+        const email = `prod.${authSeq++}@test.local`;
+        mail.failNext = 1;
+        const reg = await b.post('/api/auth/register', { email, username: `prod${Date.now() % 1000000}`, password: PW, displayName: 'Prod' });
+        assert.equal(reg.status, 201, JSON.stringify(reg.json));
+        assert.equal(reg.json.emailSent, false);
+        assert.match(reg.json.message, /could not be sent/);
+        assert.equal(reg.json.token, undefined); assert.equal(reg.json.debug, undefined);
+        const sess = reg.setCookie.find((c) => c.startsWith('ct_session='));
+        assert.ok(/Secure/.test(sess) && /HttpOnly/.test(sess) && /Max-Age=172800/.test(sess), 'Secure, HttpOnly, and the lifetime follows AUTH_SESSION_TTL_DAYS: ' + sess);
+        assert.ok(log.lines.error.some((l) => /verify email could not be delivered/.test(l)), 'the failure is logged');
+
+        // the account exists and can get a new link
+        assert.equal((await b.post('/api/auth/register', { email, username: `prodx${Date.now() % 1000000}`, password: PW, displayName: 'Prod' })).status, 400);
+        await b.must('/api/auth/resend-verification', { email });
+        assert.equal(mail.sent.length, 1);
+        await b.must('/api/auth/verify-email', { token: mail.sent[0].token });
+        const login = await b.must('/api/auth/login', { email, password: PW });
+        assert.equal(login.json.token, undefined);
+        assert.equal(login.json.debug, undefined);
+
+        const s = cookieSocket(prod.port, b.cookieHeader);
+        await until(() => s.welcome(), 'production welcome');
+        assert.equal(s.welcome().token, undefined, 'the welcome message does not echo the session token');
+        s.ws.close();
+
+        // forgot-password: same answer for a known account whose email fails and for an address that does not exist
+        mail.failNext = 1;
+        const known = await b.post('/api/auth/forgot-password', { email });
+        const unknown = await b.post('/api/auth/forgot-password', { email: `nobody.${authSeq++}@test.local` });
+        assert.deepEqual([known.status, unknown.status], [200, 200]);
+        assert.equal(known.json.message, unknown.json.message);
+        assert.equal(known.json.debug, undefined);
+      } finally { delete process.env.AUTH_SESSION_TTL_DAYS; await prod.close(); }
+    });
+    await test('housekeeping removes expired sessions, used tokens and old rate-limit rows, and keeps what is still valid', async () => {
+      const dbAuth = require('../db/auth');
+      const u = await newUser(srv, 'Purge');
+      const pid = u.player.id;
+      const h = () => crypto.randomBytes(32).toString('hex');
+      const [oldSess, legacy, fresh, oldTok] = [h(), h(), h(), h()];
+      await x.query("INSERT INTO auth_sessions (player_id, token_hash, expires_at) VALUES ($1,$2, NOW() - INTERVAL '10 days'), ($1,$3, NULL), ($1,$4, NOW() + INTERVAL '5 days')", [pid, oldSess, legacy, fresh]);
+      await x.query("INSERT INTO auth_email_tokens (player_id, purpose, email, token_hash, expires_at) VALUES ($1,'verify_email','x@test.local',$2, NOW() - INTERVAL '10 days')", [pid, oldTok]);
+      await x.query("INSERT INTO auth_rate_limits (scope, key, window_start, count) VALUES ('purge:test','old', NOW() - INTERVAL '2 days', 1), ('purge:test','new', NOW(), 1)");
+      const out = await dbAuth.purgeExpired();
+      assert.ok(out.sessions >= 1 && out.tokens >= 1 && out.rateLimits >= 1, JSON.stringify(out));
+      const left = (await q('SELECT token_hash FROM auth_sessions WHERE token_hash IN ($1, $2, $3)', [oldSess, legacy, fresh])).map((r) => r.token_hash);
+      assert.deepEqual(left.sort(), [legacy, fresh].sort(), 'the expired session is gone; the legacy and the valid ones stay');
+      assert.deepEqual((await q("SELECT key FROM auth_rate_limits WHERE scope = 'purge:test'")).map((r) => r.key), ['new']);
+      assert.equal((await q('SELECT count(*)::int AS n FROM auth_email_tokens WHERE token_hash = $1', [oldTok]))[0].n, 0);
+    });
     hana.ws.close();
     await srv.close();
 
     console.log('players who leave');
     await test('a player who leaves early is stored as such and does not get the game in their stats; the one who stayed does', async () => {
       srv = await start({ ...fast, matchLog: quiet() });
-      const a = client(srv.port, 'Stayer'); const b = client(srv.port, 'Quitter');
-      await a.ready(); await b.ready();
+      const a = await authClient(srv, 'Stayer'); const b = await authClient(srv, 'Quitter');
       a.send({ t: 'create', gameId: 'wizard' });
       await until(() => a.room, 'table');
       a.send({ t: 'setSeats', seats: 3 });
@@ -148,7 +298,7 @@ function client(port, name, token) {
       const ps = await q('SELECT * FROM match_participants WHERE match_id = $1 ORDER BY seat', [m.id]);
       assert.deepEqual(ps.map((p) => [p.left_early, p.is_bot]), [[false, false], [true, false], [false, true]]);
       assert.equal((await a.getStats()).played, 1);
-      b.send({ t: 'hello', name: 'Quitter', token: b.token });
+      b.send({ t: 'hello', token: b.token });
       assert.equal((await b.getStats()).played, 0, 'leaving a game early is not a loss');
       a.ws.close(); b.ws.close();
       await srv.close();
@@ -236,9 +386,14 @@ function client(port, name, token) {
       assert.match(child.stderr, /FATAL: refusing to start: Cannot reach the database/);
       assert.doesNotMatch(child.stdout, /running on/);
     });
+    await test('production refuses to start without the email settings', async () => {
+      const child = await runServer({ NODE_ENV: 'production', DATABASE_URL: t.url, MATCH_SPOOL_DIR: spool(), EMAIL_PROVIDER: '', RESEND_API_KEY: '' });
+      assert.equal(child.code, 1);
+      assert.match(child.stderr, /Transactional email is not configured/);
+    });
     if (process.platform !== 'win32') {
       await test('the production process starts on this database (HSTS, /readyz) and exits cleanly on SIGTERM', async () => {
-        const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env: { ...process.env, NODE_ENV: 'production', PORT: '0', DATABASE_URL: t.url, MATCH_SPOOL_DIR: spool() }, cwd: path.join(__dirname, '..') });
+        const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], { env: { ...process.env, NODE_ENV: 'production', PORT: '0', DATABASE_URL: t.url, MATCH_SPOOL_DIR: spool(), EMAIL_PROVIDER: 'resend', EMAIL_FROM: 'Tableverse <noreply@example.test>', PUBLIC_APP_URL: 'https://example.test', RESEND_API_KEY: 'test-key' }, cwd: path.join(__dirname, '..') });
         let out = ''; let err = '';
         child.stdout.on('data', (d) => (out += d)); child.stderr.on('data', (d) => (err += d));
         const port = await until(() => (/running on http:\/\/localhost:(\d+) \(postgres store\)/.exec(out) || [])[1], 'production server up (' + err + ')', 20000);

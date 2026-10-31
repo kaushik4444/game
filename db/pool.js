@@ -106,20 +106,32 @@ async function query(text, params) {
 async function withTransaction(fn) {
   if (!pool) throw new Error('Database is not configured. Set DATABASE_URL.');
   const client = await pool.connect();
+  // pg-pool removes its idle-client error listener while a client is checked
+  // out. A backend can disappear in the middle of a transaction (including
+  // our deliberate pg_terminate_backend resilience tests), so own that error
+  // until the client is released back to the pool.
+  let connectionError = null;
+  const onClientError = (err) => { connectionError ||= err; };
+  client.on('error', onClientError);
   try {
     await client.query('BEGIN');
     const result = await fn(client);
+    if (connectionError) throw connectionError;
     await client.query('COMMIT');
+    if (connectionError) throw connectionError;
     return result;
   } catch (err) {
     try {
-      await client.query('ROLLBACK');
+      if (!connectionError) await client.query('ROLLBACK');
     } catch (rollbackErr) {
-      console.error('[db] ROLLBACK failed:', rollbackErr.message); // keep the original error
+      // A broken connection cannot roll back; keep the original operation error.
+      if (!connectionError) console.error('[db] ROLLBACK failed:', rollbackErr.message);
     }
-    throw err;
+    throw connectionError || err;
   } finally {
-    client.release();
+    client.removeListener('error', onClientError);
+    // Tell pg-pool that a socket error made this checked-out client unusable.
+    client.release(connectionError || undefined);
   }
 }
 

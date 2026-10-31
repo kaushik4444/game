@@ -3,6 +3,7 @@
 require('./helpers/env'); // first: NODE_ENV=test, no .env loading, no DATABASE_URL (memory-mode test)
 const assert = require('node:assert/strict');
 const WebSocket = require('ws');
+const { registerAndVerify } = require('./helpers/auth');
 const { computeProfile } = require('../db/stats');
 const dbMatches = require('../db/matches');
 const dbPool = require('../db/pool');
@@ -77,12 +78,13 @@ const rows = (pattern, game = 'wizard') => [...pattern].map((c, i) => ({ gameId:
 
   await test('getStats returns only the asking player\'s own record over the websocket', async () => {
     const srv = await start({ port: 0, trustProxy: false, database: { prepare: async () => ({ mode: 'memory' }) } });
+    const auth = await registerAndVerify(srv.port, { email: `stats.${Date.now()}@test.local`, displayName: 'Stat' });
     const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`);
     const msgs = [];
     ws.on('message', (d) => msgs.push(JSON.parse(d)));
     await new Promise((r) => ws.on('open', r));
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-    ws.send(JSON.stringify({ t: 'hello', name: 'Stat' })); await wait(200);
+    ws.send(JSON.stringify({ t: 'hello', token: auth.token })); await wait(200);
     const me = msgs.find((m) => m.t === 'welcome');
     ws.send(JSON.stringify({ t: 'getStats', playerId: '00000000-0000-4000-8000-0000000000b1' })); await wait(150); // asking for somebody else's id must not work
     const first = msgs.filter((m) => m.t === 'stats').pop();

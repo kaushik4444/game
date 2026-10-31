@@ -29,6 +29,9 @@ Tableverse uses PostgreSQL (Neon, Supabase, or self-hosted) for persistent playe
 - **Reliable saving**: a finished game is saved in the background and never delays play. A transient failure (lost connection, timeout, deadlock, database restarting) is retried up to 5 times over about 35 seconds; a permanent one (bad data, missing table) is not retried. Retrying is safe because of the match key. A result that still cannot be saved is **never** reported as saved: it is logged as `NOT SAVED` with the game, table and players, the table gets a "result could not be saved" message, and `/readyz` shows the counts. Before the first attempt the result is also written to a small spool file (`MATCH_SPOOL_DIR`, default the system temp folder, `off` to disable) and removed once the database has it; on the next start leftovers are replayed. On SIGTERM (a Render deploy) the server waits up to 15 s for pending writes. Limits: on a host with an ephemeral disk the spool survives a process restart but not a redeploy onto a fresh machine, and a hard crash (SIGKILL, power loss) between the game ending and the spool write loses that one result.
 - **What the stats mean**: a win is "you won": in Wizard the highest score (ties share), in 29 your **team** won, in Poker the biggest stack, in The Mind the **whole table** won (co-operative). *Best* is only shown where it is comparable: Wizard highest score; Poker the final stack as a multiple of the starting chips (a raw stack means different things after 1,000 and 5,000 chips); The Mind most levels cleared. 29 has no best score because a winning team always ends near the target.
 - **Abuse limits**: per-address caps on open sockets (40) and new accounts per hour (30), a site-wide cap on new accounts per minute (120) and on players in memory (5000), and WebSocket upgrades from other websites (foreign `Origin`) are refused. Add extra allowed origins with `ALLOWED_ORIGINS`. Behind Render's proxy set `TRUST_PROXY=1` (done in `render.yaml`).
+- **Account auth (Stage 1)**: the home page is public — visitors browse the games and the live table directory without a session (fetched from `GET /api/games`, no auth, socket-free); any play action (create, join, rejoin, code box, stats) opens a small sign-in dialog over the home page and resumes exactly what the visitor tapped once they log in. The session lives only in an HttpOnly `ct_session` cookie (`SameSite=Lax`, `Secure` in production, lifetime `AUTH_SESSION_TTL_DAYS`, default 30). Scripts never see it: the WebSocket upgrade carries the cookie itself and the server never returns the token in a response (only `NODE_ENV=test` does, for non-browser test clients). CSRF uses a server-set `ct_csrf` cookie: every POST under `/api/auth` must repeat its value in the `X-CSRF-Token` header, so another site can neither read nor set it. Logging out closes that session's open socket; log out everywhere and password resets close all of the account's sockets. `POST /api/auth/logout` revokes only the current session; `POST /api/auth/logout-all` revokes all of them. Expired sessions, used tokens and old rate-limit rows are purged on start and every 6 hours.
+- **Transactional email**: production requires `EMAIL_PROVIDER=resend`, `EMAIL_FROM`, `PUBLIC_APP_URL` and `RESEND_API_KEY` (the server refuses to start without them; `render.yaml` lists them). If the provider is down after sign-up, the account is still created and the response says the email could not be sent, so the person can use "Resend verification email". Resend and forgot-password always answer the same way, whether or not the address has an account. Logs only ever show a masked address and a redacted excerpt of any provider error (tokens, full addresses and the API key are stripped) — never the link that was sent.
+- **Database required**: accounts live in PostgreSQL, so without `DATABASE_URL` nobody can log in. Local development needs a database (a local PostgreSQL is enough). Players from before accounts existed (anonymous tokens) cannot sign in any more and their stats are not linked to new accounts.
 - **Announcement banner**: set the `ANNOUNCEMENT` environment variable (max 200 characters, plain text) to show a dismissible 📣 notice on the home screen. Changing the text shows it again to players who dismissed the old one; unset it to remove the banner.
 - **Render Deployment**:
   1. Create a Web Service connected to your repository.
@@ -95,6 +98,25 @@ TEST_DATABASE_URL=postgres://postgres:secret@127.0.0.1:5432/postgres npm run tes
 ```
 
 Each run creates a throw-away database (`tv_test_<random>`) and drops it afterwards. The helper refuses managed hosts (Neon, Supabase, Render, AWS ...), the same server as your `DATABASE_URL` or `.env`, and any non-local host unless `ALLOW_REMOTE_TEST_DB=1` (never the managed hosts). Tests never use `DATABASE_URL`.
+
+Auth-focused local checks:
+
+```bash
+npm run build
+npm test
+TEST_DATABASE_URL=postgres://postgres:secret@127.0.0.1:5432/postgres npm run test:pg
+```
+
+Required auth env vars for deployment:
+
+- `DATABASE_URL`
+- `EMAIL_PROVIDER=resend`
+- `EMAIL_FROM`
+- `PUBLIC_APP_URL`
+- `RESEND_API_KEY`
+- optional auth tuning: `AUTH_SESSION_TTL_DAYS`, `AUTH_VERIFY_TTL_MIN`, `AUTH_RESET_TTL_MIN`, and `RL_*` auth rate-limit overrides.
+
+Do not use production Neon credentials for local or CI tests; keep `TEST_DATABASE_URL` pointed at a disposable local/dev PostgreSQL server.
 
 ## Notes
 
