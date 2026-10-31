@@ -16,18 +16,23 @@ Bots can fill any open seat.
 Tableverse uses PostgreSQL (Neon, Supabase, or self-hosted) for persistent player accounts, sessions, and match history:
 
 - **Environment Configuration**: Set `DATABASE_URL` in your environment (e.g. `postgresql://user:pass@ep-xyz.neon.tech/neondb?sslmode=require`).
-- **Zero-config Fallback**: If `DATABASE_URL` is omitted, Tableverse automatically runs with an in-memory repository for local development and offline test execution.
+- **Zero-config Fallback (development and tests only)**: If `DATABASE_URL` is omitted and `NODE_ENV` is not `production`, Tableverse runs with an in-memory repository.
+- **Production is strict**: with `NODE_ENV=production` the server **exits with an error** if `DATABASE_URL` is missing, the `pg` package is not installed, the database cannot be reached, or a migration fails. It checks the database and migrates *before* it accepts any player.
+- **Health checks**: `/healthz` is liveness (the process is up). `/readyz` also checks the database (503 if it is down).
 - **Migrations**: Automated version-controlled SQL migrations located in `db/migrations/`. Run manually via:
   ```bash
   npm run migrate
   ```
-  Or automatically applied when the server boots.
+  They are also applied when the server boots, in one transaction under an advisory lock (two instances cannot race, and a failed migration changes nothing).
 - **Anonymous Player Accounts**: Guests are automatically provisioned with permanent internal UUIDs and bearer tokens hashed with SHA-256 before storage.
-- **Completed Match Archive**: Every completed game is saved to the `matches` and `match_participants` tables with player scores and winner tracking.
+- **Completed Match Archive**: Every completed game is saved once (a per-game `match_key` makes recording idempotent) to `matches` and `match_participants`, all or nothing. Each game reports per-seat `results()` (score and winner). A player who left mid-game (a bot finished their seat) is kept in the record but not counted in stats. Matches written before results existed (no `match_key`) have unknown winners and are left out of stats.
+- **Reliable saving**: a finished game is saved in the background and never delays play. A transient failure (lost connection, timeout, deadlock, database restarting) is retried up to 5 times over about 35 seconds; a permanent one (bad data, missing table) is not retried. Retrying is safe because of the match key. A result that still cannot be saved is **never** reported as saved: it is logged as `NOT SAVED` with the game, table and players, the table gets a "result could not be saved" message, and `/readyz` shows the counts. Before the first attempt the result is also written to a small spool file (`MATCH_SPOOL_DIR`, default the system temp folder, `off` to disable) and removed once the database has it; on the next start leftovers are replayed. On SIGTERM (a Render deploy) the server waits up to 15 s for pending writes. Limits: on a host with an ephemeral disk the spool survives a process restart but not a redeploy onto a fresh machine, and a hard crash (SIGKILL, power loss) between the game ending and the spool write loses that one result.
+- **What the stats mean**: a win is "you won": in Wizard the highest score (ties share), in 29 your **team** won, in Poker the biggest stack, in The Mind the **whole table** won (co-operative). *Best* is only shown where it is comparable: Wizard highest score; Poker the final stack as a multiple of the starting chips (a raw stack means different things after 1,000 and 5,000 chips); The Mind most levels cleared. 29 has no best score because a winning team always ends near the target.
+- **Abuse limits**: per-address caps on open sockets (40) and new accounts per hour (30), a site-wide cap on new accounts per minute (120) and on players in memory (5000), and WebSocket upgrades from other websites (foreign `Origin`) are refused. Add extra allowed origins with `ALLOWED_ORIGINS`. Behind Render's proxy set `TRUST_PROXY=1` (done in `render.yaml`).
 - **Announcement banner**: set the `ANNOUNCEMENT` environment variable (max 200 characters, plain text) to show a dismissible 📣 notice on the home screen. Changing the text shows it again to players who dismissed the old one; unset it to remove the banner.
 - **Render Deployment**:
   1. Create a Web Service connected to your repository.
-  2. Set `DATABASE_URL` in the Render Environment Variables tab pointing to your Neon database.
+  2. Set `DATABASE_URL` in the Render Environment Variables tab pointing to your Neon database (required: the deploy fails without it). `render.yaml` also sets `NODE_ENV=production` and `TRUST_PROXY=1`.
   3. Build Command: `npm install`
   4. Start Command: `npm start`
   5. Optional: set `ANNOUNCEMENT` to show a site-wide banner. `render.yaml` (service `tableverse`) declares both variables.
@@ -80,7 +85,16 @@ Run `npm start` to serve the arena and `npm test` to run all pure-engine, simula
 
 ## Tests
 
-`npm test` covers Wizard, 29, Poker, and The Mind engines plus a real WebSocket server suite that checks room creation, permission boundaries, bot filling, spectator privacy, reconnects, bot takeover, rematches, and time limits.
+`npm test` covers the Wizard, 29, Poker and The Mind engines, match results and stats, the save queue (retries, spool, shutdown), and a real WebSocket server suite (rooms, permissions, bots, spectators, reconnects, rematches, time limits, abuse limits). These tests run on the **in-memory store** and can never reach a real database: every test file starts with `tests/helpers/env.js`, which sets `NODE_ENV=test`, stops `.env` files from loading and removes `DATABASE_URL`.
+
+**PostgreSQL tests** (`tests/db.pg.test.js`, `tests/production.pg.test.js`: migrations, upgrade from the previous schema, recording, duplicates, rollback, a complete game through the server into real rows, stats, killed connections, an unreachable database, a restart with a pending result, SIGTERM) need their own server and are skipped without it:
+
+```bash
+# any local PostgreSQL where this user may CREATE DATABASE
+TEST_DATABASE_URL=postgres://postgres:secret@127.0.0.1:5432/postgres npm run test:pg   # fails if the variable is missing
+```
+
+Each run creates a throw-away database (`tv_test_<random>`) and drops it afterwards. The helper refuses managed hosts (Neon, Supabase, Render, AWS ...), the same server as your `DATABASE_URL` or `.env`, and any non-local host unless `ALLOW_REMOTE_TEST_DB=1` (never the managed hosts). Tests never use `DATABASE_URL`.
 
 ## Notes
 

@@ -33,7 +33,8 @@ function loadEnv() {
   }
 }
 
-loadEnv();
+// Tests must never pick up a developer's real DATABASE_URL from a .env file (that is how test rows end up in production).
+if (process.env.NODE_ENV !== 'test' && !process.env.TABLEVERSE_SKIP_DOTENV) loadEnv();
 
 let pg;
 try {
@@ -50,11 +51,16 @@ if (connectionString && pg) {
   // Neon DATABASE_URL already includes sslmode=require.
   // Let the pg library parse the connection string and handle SSL automatically.
   // For local connections without SSL in the URL, ssl will be undefined (no SSL).
+  const isLocal = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(connectionString) || /[?&]host=\//.test(connectionString);
+  const hasSslMode = /[?&]sslmode=/.test(connectionString);
   pool = new pg.Pool({
     connectionString,
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
+    statement_timeout: 10000, // a stuck query must not hang a player's connection forever
+    // In production never talk to a remote database in plaintext, even if the URL forgot ?sslmode=require
+    ...(process.env.NODE_ENV === 'production' && !isLocal && !hasSslMode ? { ssl: { rejectUnauthorized: true } } : {}),
   });
 
   pool.on('error', (err) => {
@@ -67,6 +73,17 @@ if (connectionString && pg) {
  */
 function hasDatabase() {
   return pool !== null;
+}
+
+/** True if DATABASE_URL is set but the `pg` driver could not be loaded (a broken install, not a choice). */
+function driverMissing() {
+  return Boolean(connectionString) && !pg;
+}
+
+/** Round-trip to the database; rejects if it cannot be reached. */
+async function ping() {
+  if (!pool) throw new Error('Database is not configured. Set DATABASE_URL.');
+  await pool.query('SELECT 1');
 }
 
 /**
@@ -95,7 +112,11 @@ async function withTransaction(fn) {
     await client.query('COMMIT');
     return result;
   } catch (err) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr) {
+      console.error('[db] ROLLBACK failed:', rollbackErr.message); // keep the original error
+    }
     throw err;
   } finally {
     client.release();
@@ -111,6 +132,8 @@ async function close() {
 
 module.exports = {
   hasDatabase,
+  driverMissing,
+  ping,
   query,
   withTransaction,
   close,

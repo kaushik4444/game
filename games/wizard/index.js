@@ -13,6 +13,8 @@ module.exports = {
   accent: '#7b4bd0',
   tagline: 'Predict exactly how many tricks you will win. Trump, wizards and jesters make it wild.',
   seats: { min: 3, max: 6, default: 4 },
+  // how this game appears in a player's stats. 'solo': every player wins or loses on their own (ties share the win)
+  stats: { kind: 'solo', bestLabel: 'Highest score', bestOf: (row) => row.score },
   options: [
     {
       key: 'variant',
@@ -65,6 +67,11 @@ module.exports = {
       stamp: () => g.lastTrick, // changes whenever a trick is completed
       autoAction: () => (g.phase === 'roundEnd' ? { type: 'continue' } : null),
       isOver: () => g.phase === 'gameOver',
+      // final result per seat, in seat order: used for match history and stats
+      results: () => {
+        const best = Math.max(...g.players.map((p) => p.score));
+        return g.players.map((p) => ({ score: p.score, winner: p.score === best }));
+      },
     };
   },
 };

@@ -1,5 +1,6 @@
 'use strict';
 /** End-to-end: real HTTP + WebSocket server, two human clients and a bot play a complete Wizard game. */
+require('./helpers/env'); // first: NODE_ENV=test, no .env loading, no DATABASE_URL (memory-mode test)
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const WebSocket = require('ws');

@@ -6,9 +6,11 @@ const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const games = require('./games');
 const dbPool = require('./db/pool');
-const { migrate } = require('./db/migrate');
+const { prepareDatabase } = require('./db/startup');
+const { buildMatchRecord } = require('./db/matchRecord');
 const dbPlayers = require('./db/players');
 const dbMatches = require('./db/matches');
+const { createMatchQueue, defaultSpoolDir } = require('./db/matchQueue');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = {
@@ -48,6 +50,27 @@ function start(opts = {}) {
   const maxMsgsPerSec = opts.maxMsgsPerSec ?? 30; // per socket; humans send a handful of messages per minute
   const botScale = opts.botDelay ? Math.min(1, opts.botDelay[1] / 1600) : 1; // tests run with fast bots; plugin-timed bots follow
   const trickPauseMs = opts.trickPauseMs ?? 1700; // time everybody gets to see a finished trick being collected
+  const env = opts.env || process.env;
+  const production = env.NODE_ENV === 'production';
+  const trustProxy = opts.trustProxy ?? (env.TRUST_PROXY ? env.TRUST_PROXY === '1' : production); // behind Render's proxy the client address is in X-Forwarded-For
+  const allowedOrigins = String(opts.allowedOrigins ?? env.ALLOWED_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const maxSocketsPerIp = opts.maxSocketsPerIp ?? 40; // open WebSockets per client address
+  const maxNewAccountsPerIp = opts.maxNewAccountsPerIp ?? 30; // new anonymous accounts per client address per hour
+  const maxNewAccountsPerMin = opts.maxNewAccountsPerMin ?? 120; // site-wide backstop: stops a spoofed-address flood from filling the database
+  const maxPlayers = opts.maxPlayers ?? 5000; // players held in memory
+  const database = opts.database || { prepare: () => prepareDatabase() };
+  // Finished games are saved in the background with retries; see db/matchQueue.js. `rooms` is declared below, which is fine:
+  // the callback only runs later.
+  const matchQueue = opts.matchQueue || createMatchQueue({
+    record: opts.matchRecord || ((rec) => dbMatches.recordMatch(rec)), // opts.matchRecord / matchLog: test hooks (failure injection, quiet logs)
+    log: opts.matchLog || console,
+    spoolDir: dbPool.hasDatabase() ? (opts.matchSpoolDir !== undefined ? opts.matchSpoolDir : defaultSpoolDir(env)) : null, // memory mode cannot fail, so it needs no spool
+    delays: opts.matchRetryDelays,
+    onGiveUp: (rec) => {
+      const room = rooms.get(rec.roomCode);
+      if (room && room.matchKey === rec.matchKey) sys(room, '⚠ The result of this game could not be saved right now, so it may be missing from stats.');
+    },
+  });
   const timeScale = opts.timeScale ?? 1; // tests shrink the turn time limit with this
   // Optional site-wide notice (set the ANNOUNCEMENT env var, or pass opts.announcement); shown as a dismissible banner on the home screen
   const announcement = cleanText(opts.announcement ?? process.env.ANNOUNCEMENT ?? '');
@@ -75,6 +98,15 @@ function start(opts = {}) {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('ok');
     }
+    if (rel === '/readyz') {
+      // readiness: the process is up AND the database answers (liveness is /healthz)
+      const ok = (text) => { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end(text); };
+      const q = matchQueue.stats();
+      const tail = q.pending || q.failed ? ` (matches: ${q.pending} pending, ${q.failed} failed)` : '';
+      if (!dbPool.hasDatabase()) ok('ready (in-memory store)' + tail);
+      else dbPool.ping().then(() => ok('ready' + tail), () => { res.writeHead(503, { 'Content-Type': 'text/plain' }); res.end('database unavailable'); });
+      return;
+    }
     if (rel.includes('\0')) {
       res.writeHead(400);
       return res.end();
@@ -94,6 +126,7 @@ function start(opts = {}) {
         'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
         'Cache-Control': 'no-cache',
         ...SECURITY_HEADERS,
+        ...(production ? { 'Strict-Transport-Security': 'max-age=15552000; includeSubDomains' } : {}),
       });
       res.end(req.method === 'HEAD' ? undefined : data);
     });
@@ -222,26 +255,11 @@ function start(opts = {}) {
     if (g) {
       if (g.isOver() && room.status !== 'finished') {
         room.status = 'finished';
-        // Persist completed match asynchronously
+        // Persist the completed match once (the status guard above plus the per-game key make a second attempt a no-op)
         try {
-          const scores = g.scores ? g.scores() : [];
-          const maxScore = scores.length ? Math.max(...scores) : 0;
-          // games without a scores() hook: record the match but do not invent winners
-          const participants = room.members.map((m, idx) => ({
-            playerId: m.id,
-            name: m.name,
-            seat: idx,
-            score: scores[idx] ?? 0,
-            isWinner: scores.length > 0 && (scores[idx] ?? 0) === maxScore,
-            isBot: Boolean(m.bot),
-          }));
-          dbMatches.recordMatch({
-            roomCode: room.code,
-            gameId: room.gameId,
-            seats: room.seats,
-            options: room.options,
-            participants,
-          }).catch((err) => console.error('[server] Failed to record match:', err.message));
+          const record = buildMatchRecord(room, g);
+          if (!record) console.error(`[server] ${room.gameId} cannot report results; match not recorded`);
+          else matchQueue.enqueue(record); // never blocks the game and never rejects; failures are retried and logged by the queue
         } catch (e) {
           console.error('[server] Error preparing match record:', e.message);
         }
@@ -390,6 +408,7 @@ function start(opts = {}) {
     const wasHost = room.hostId === p.id;
     if (room.status === 'playing') {
       room.members[i].bot = true; // a bot takes over the seat; the player can take it back by rejoining
+      (room.leftEarly || (room.leftEarly = new Set())).add(p.id);
       sys(room, `🚪 ${p.name} left the game. A bot took over the seat.`);
     } else {
       room.members.splice(i, 1);
@@ -533,6 +552,7 @@ function start(opts = {}) {
         const si = room.spectators.findIndex((s) => s.id === p.id);
         if (si >= 0) room.spectators.splice(si, 1);
         seat.bot = false;
+        if (room.leftEarly) room.leftEarly.delete(p.id);
         seat.avatar = p.avatar;
         p.room = room.code;
         sys(room, `🔄 ${p.name} is back and took the seat from the bot`);
@@ -611,6 +631,20 @@ function start(opts = {}) {
       broadcast(room);
     },
 
+    // Profile statistics for the asking player only (nobody can request somebody else's)
+    getStats(p) {
+      const now = Date.now();
+      if (p.statsAt && now - p.statsAt < 1000) return;
+      p.statsAt = now;
+      dbMatches.getPlayerProfile(p.id, { memberSince: p.createdAt }).then(
+        (stats) => send(p.ws, { t: 'stats', stats }),
+        (err) => {
+          console.error('[server] stats failed:', err.message);
+          sendError(p, 'Stats are unavailable right now');
+        }
+      );
+    },
+
     setVisibility(p, msg) {
       const room = hostRoom(p, 'lobby');
       if (!room) return;
@@ -644,6 +678,9 @@ function start(opts = {}) {
         Math.random
       );
       room.status = 'playing';
+      room.matchKey = crypto.randomUUID(); // identifies this game in the match history
+      room.startedAt = Date.now();
+      room.leftEarly = new Set();
       room.deadline = null;
       room.waiting = [];
       room.pauseUntil = 0;
@@ -713,7 +750,33 @@ function start(opts = {}) {
   }
 
   // ------------------------------------------------------------ websocket
-  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 8 * 1024 });
+  // A browser sends Origin on WebSocket upgrades: refuse pages from other sites (clients without Origin, such as tests, are fine)
+  const originOk = (req) => {
+    const origin = req.headers.origin;
+    if (!origin) return true;
+    let host;
+    try { host = new URL(origin).host; } catch { return false; }
+    return host === req.headers.host || allowedOrigins.includes(origin) || allowedOrigins.includes(host);
+  };
+  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 8 * 1024, verifyClient: (info) => originOk(info.req) });
+
+  const clientIp = (req) => {
+    const xff = trustProxy ? String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() : '';
+    return xff || req.socket.remoteAddress || 'unknown';
+  };
+  const socketsByIp = new Map(); // ip -> open sockets
+  const accountsByIp = new Map(); // ip -> creation times within the last hour
+  let accountTimes = []; // creation times within the last minute (site-wide)
+  const allowNewAccount = (ip) => {
+    const now = Date.now();
+    accountTimes = accountTimes.filter((t) => now - t < 60000);
+    const mine = (accountsByIp.get(ip) || []).filter((t) => now - t < 3600000);
+    if (accountTimes.length >= maxNewAccountsPerMin || mine.length >= maxNewAccountsPerIp || players.size >= maxPlayers) return false;
+    mine.push(now);
+    accountsByIp.set(ip, mine);
+    accountTimes.push(now);
+    return true;
+  };
 
   let helloQueue = Promise.resolve(); // hellos are handled one at a time so a token can never get two player objects
   const onHello = (ws, msg) => {
@@ -736,6 +799,7 @@ function start(opts = {}) {
           token: msg.token,
           name: dbPlayer.display_name,
           avatar: dbPlayer.avatar,
+          createdAt: dbPlayer.created_at,
           room: null,
           ws: null,
           connected: false,
@@ -747,7 +811,11 @@ function start(opts = {}) {
     }
 
     if (!p) {
-      // Create new anonymous player account
+      // Create new anonymous player account (limited: every account is a database row)
+      if (!allowNewAccount(ws.ip)) {
+        send(ws, { t: 'error', message: 'Too many new players right now, please try again in a few minutes' });
+        return ws.close(1013, 'busy');
+      }
       const created = await dbPlayers.createAnonymousPlayer({
         displayName: cleanName(msg.name) || 'Guest ' + (100 + crypto.randomInt(900)),
         avatar: AVATARS.includes(msg.avatar) ? msg.avatar : pick(AVATARS),
@@ -759,6 +827,7 @@ function start(opts = {}) {
         token: bearerToken,
         name: created.player.display_name,
         avatar: created.player.avatar,
+        createdAt: created.player.created_at,
         room: null,
         ws: null,
         connected: false,
@@ -790,7 +859,16 @@ function start(opts = {}) {
     } else p.room = null;
   }
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    ws.ip = clientIp(req);
+    const open = (socketsByIp.get(ws.ip) || 0) + 1;
+    socketsByIp.set(ws.ip, open);
+    ws.once('close', () => {
+      const n = (socketsByIp.get(ws.ip) || 1) - 1;
+      if (n <= 0) socketsByIp.delete(ws.ip);
+      else socketsByIp.set(ws.ip, n);
+    });
+    if (open > maxSocketsPerIp) return ws.close(1013, 'too many connections');
     ws.isAlive = true;
     ws.player = null;
     ws.msgs = 0;
@@ -879,6 +957,7 @@ function start(opts = {}) {
         }
       }
     }
+    for (const [ip, times] of accountsByIp) if (!times.some((t) => now - t < 3600000)) accountsByIp.delete(ip);
     for (const p of players.values()) {
       if (!p.connected && !rooms.has(p.room) && now - p.lastSeen > 60 * 60 * 1000) {
         players.delete(p.id);
@@ -889,24 +968,44 @@ function start(opts = {}) {
   ticker.unref();
   gc.unref();
 
-  function close() {
+  async function close({ drainMs = 0 } = {}) {
     clearInterval(ticker);
     clearInterval(gc);
+    if (drainMs) await matchQueue.drain(drainMs); // let pending match writes finish (shutdown)
+    matchQueue.close();
     for (const room of rooms.values()) clearTimeout(room.timer);
     for (const ws of wss.clients) ws.terminate();
     return new Promise((resolve) => wss.close(() => server.close(() => resolve())));
   }
 
-  // Run pending database migrations before accepting players, so the first visitor never meets missing tables
-  const migrated = dbPool.hasDatabase()
-    ? migrate().catch((err) => console.error('[server] Startup migration warning:', err.message))
-    : Promise.resolve();
-
-  return migrated.then(() => new Promise((resolve) => server.listen(port, () => resolve({ server, port: server.address().port, close }))));
+  // Verify the database and run migrations BEFORE accepting anybody. Any failure rejects start(): the process must not
+  // serve players on a database it cannot use (and in production it must not silently fall back to memory).
+  return database.prepare().then((info) => {
+    if (info && info.mode === 'postgres') matchQueue.replaySpool(); // results a previous run could not save
+    return new Promise((resolve) => server.listen(port, () => resolve({ server, port: server.address().port, close, database: info, matchQueue })));
+  });
 }
 
 module.exports = { start };
 
 if (require.main === module) {
-  start().then(({ port }) => console.log(`Tableverse running on http://localhost:${port}`));
+  start().then(
+    ({ port, database, close }) => {
+      console.log(`Tableverse running on http://localhost:${port} (${database.mode} store)`);
+      // Render sends SIGTERM on deploy/restart: finish pending match writes first (it waits 30 s before killing us)
+      let stopping = false;
+      const stop = (sig) => {
+        if (stopping) return;
+        stopping = true;
+        console.log(`[server] ${sig}: finishing pending match writes, then exiting`);
+        close({ drainMs: 15000 }).then(() => process.exit(0), () => process.exit(1));
+      };
+      process.on('SIGTERM', () => stop('SIGTERM'));
+      process.on('SIGINT', () => stop('SIGINT'));
+    },
+    (err) => {
+      console.error('[server] FATAL: refusing to start:', err.message);
+      process.exit(1);
+    }
+  );
 }
