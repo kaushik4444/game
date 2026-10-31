@@ -47,6 +47,7 @@
     sessionListOpen: store.get('ct_sessions_open') !== '0',
     guest: false, // true when the home screen is the public snapshot (no socket, no session)
     auth: null, // the open auth sheet: 'login' or 'register'
+    requireEmailVerification: true, // current server policy; secure default until the server says otherwise
     pending: [], // play actions that wait for a successful login, then run once the lobby opens
   };
   const plugins = {};
@@ -143,6 +144,7 @@
       S.username = out.player && out.player.username ? out.player.username : S.username;
       S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
       S.emailVerified = !!out.emailVerified;
+      S.requireEmailVerification = policyRequiresVerification(out);
       S.named = !!S.name;
       if (S.name) store.set('ct_name', S.name);
       if (S.username) store.set('ct_username', S.username);
@@ -193,12 +195,30 @@
     toast('Logged out.');
   }
 
+  function policyRequiresVerification(out) {
+    if (Object.prototype.hasOwnProperty.call(out || {}, 'emailVerificationRequired')) return !!out.emailVerificationRequired;
+    if (Object.prototype.hasOwnProperty.call(out || {}, 'requiresVerification')) return !!out.requiresVerification;
+    return true;
+  }
+
+  function requiresVerificationFromResponse(out) {
+    return Object.prototype.hasOwnProperty.call(out || {}, 'requiresVerification') ? !!out.requiresVerification : true;
+  }
+
+  function authPolicyHintHTML() {
+    if (S.requireEmailVerification) {
+      return '<p class="auth-policy-hint">Email verification is required before entering the lobby.</p>';
+    }
+    return '<p class="auth-policy-hint optional" role="status">Friend-testing mode: email verification is optional right now. You can play immediately after creating your account.</p>';
+  }
+
   // The auth sheet: a small dialog over the (public) home page. Logging in is never a place you get sent to —
   // it is a step you take when you try to play, and afterwards you land where you were heading.
   function openAuthSheet(tab = 'login', msg = '') {
     S.auth = tab;
     closeOverlay();
     const loginOn = tab === 'login';
+    const canResend = S.requireEmailVerification;
     const overlay = document.createElement('div');
     overlay.id = 'auth-overlay';
     overlay.className = 'overlay';
@@ -215,13 +235,14 @@
           <input id="loginPassword" type="password" required minlength="8" placeholder="Password" autocomplete="current-password">
           <button class="btn big" type="submit">Log in</button>
         </form>
-        <div class="row auth-links"><button class="btn ghost small" data-act="forgotPassword">Forgot password?</button><button class="btn ghost small" data-act="resendVerification">Resend verification email</button></div>
+        <div class="row auth-links"><button class="btn ghost small" data-act="forgotPassword">Forgot password?</button><button class="btn ghost small ${canResend ? '' : 'subtle'}" data-act="resendVerification">Resend verification email</button></div>
       ` : `
         <form id="registerForm" class="auth-form">
           <input id="registerName" type="text" maxlength="20" required placeholder="Display name" autocomplete="nickname">
           <input id="registerUsername" type="text" maxlength="24" required pattern="[a-z0-9_]{3,24}" placeholder="Username (lowercase)" autocomplete="username">
           <small id="registerUsernameHint" class="hint"></small>
           <input id="registerEmail" type="email" required placeholder="Email" autocomplete="email">
+          ${authPolicyHintHTML()}
           <input id="registerPassword" type="password" required minlength="8" placeholder="Password (8+ characters)" autocomplete="new-password">
           <button class="btn big" type="submit">Create account</button>
         </form>
@@ -261,7 +282,8 @@
     S.username = out.player && out.player.username ? out.player.username : S.username;
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
     S.named = !!S.name;
-    S.emailVerified = out.requiresVerification === false || !!(out.player && out.player.email_verified);
+    S.requireEmailVerification = policyRequiresVerification(out);
+    S.emailVerified = !requiresVerificationFromResponse(out);
     S.signedOutIntentionally = false;
     store.set('ct_email_verified', S.emailVerified ? '1' : '0');
     if (S.name) store.set('ct_name', S.name);
@@ -283,7 +305,8 @@
     S.username = out.player && out.player.username ? out.player.username : String(username || '').toLowerCase();
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
     S.named = !!S.name;
-    S.emailVerified = out.requiresVerification === false || !!(out.player && out.player.email_verified);
+    S.requireEmailVerification = policyRequiresVerification(out);
+    S.emailVerified = !requiresVerificationFromResponse(out);
     S.signedOutIntentionally = false;
     store.set('ct_email_verified', S.emailVerified ? '1' : '0');
     if (S.name) store.set('ct_name', S.name);
@@ -671,7 +694,9 @@
     }
     if (!S.emailVerified) {
       await loadSnapshot();
-      openAuthSheet('login', 'Please verify your email to enter the lobby.');
+      openAuthSheet('login', S.requireEmailVerification
+        ? 'Please verify your email to enter the lobby.'
+        : 'Your account is ready. Friend-testing mode currently allows entry without email verification.');
       return;
     }
     connect();
@@ -861,13 +886,14 @@
   const range = (s) => (s.min === s.max ? `${s.min} players` : `${s.min}–${s.max} players`);
 
   // ------------------------------------------------------------ top bar, account menu and its dialogs
-  const WHATS_NEW_VERSION = '2026-11';
+  const WHATS_NEW_VERSION = '2026-11-friend-testing';
   const WHATS_NEW = [
+    ['🧪', 'Friend testing is open', 'Tableverse is now open for friend testing with fast sign-up and browser play on phone and desktop.'],
+    ['🔓', 'Optional email verification mode', 'Friend-testing mode can temporarily allow immediate play after sign-up while still keeping accounts unverified in storage until verified.'],
+    ['⚙️', 'Server-controlled auth policy', 'The app now follows the server policy for verification requirements, so login/register messaging always matches the backend mode.'],
     ['🔐', 'Accounts', 'Sign in with email and password. Your name, avatar and stats follow your account to every device.'],
     ['🧑‍🎤', 'Account menu', 'Profile, settings, stats, what’s new and log out now live in the menu at the top right.'],
     ['🌐', 'Public and private tables', 'A live table directory, one-tap rejoin and stronger 6-letter room codes.'],
-    ['📜', 'Play-by-play', 'Every table keeps an activity log of each play as it happens.'],
-    ['🧭', 'Coming soon', 'Saboteur, 6 nimmt! and UNO.'],
   ];
   const hasNewNews = () => S.wnSeen !== WHATS_NEW_VERSION;
 
@@ -962,6 +988,7 @@
     const body = () => `<div class="setting-row"><div><b>Sound effects</b><small>Card sounds, turn alerts and fanfares.</small></div><button type="button" class="btn ${CardTable.sound.isMuted() ? 'ghost' : ''} small" data-modal-act="toggleSound" aria-pressed="${!CardTable.sound.isMuted()}">${CardTable.sound.isMuted() ? 'Off' : 'On'}</button></div>
       <div class="setting-row"><div><b>Recent tables</b><small>${S.recentTables.length ? `${S.recentTables.length} remembered on this device.` : 'Nothing remembered on this device.'}</small></div><button type="button" class="btn ghost small" data-modal-act="clearRecent" ${S.recentTables.length ? '' : 'disabled'}>Clear</button></div>
       <div class="setting-row"><div><b>Announcements</b><small>Show the site banner again if you dismissed it.</small></div><button type="button" class="btn ghost small" data-modal-act="showAnnouncement" ${S.announcement && S.dismissedAnnouncement === S.announcement ? '' : 'disabled'}>Show</button></div>
+      <div class="setting-row"><div><b>Email verification</b><small>${S.requireEmailVerification ? 'Required before entering the lobby in this environment.' : 'Optional in this friend-testing environment. You can play immediately after sign-up.'}</small></div><span class="verify-pill ${S.requireEmailVerification ? 'required' : 'optional'}">${S.requireEmailVerification ? 'Required' : 'Optional'}</span></div>
       <div class="setting-row"><div><b>Account</b><small>${S.username ? `Signed in as @${esc(S.username)}.` : 'Signed in.'} Signing out everywhere ends every session on every device.</small></div><button type="button" class="btn ghost small" data-modal-act="logoutAllFromSettings">Log out everywhere</button></div>`;
     openModal('Settings', body(), (o) => {
       const redraw = () => { o.querySelector('.modal-body').innerHTML = body(); };

@@ -271,12 +271,17 @@ function cookieSocket(port, cookie) {
         const reg = await b.post('/api/auth/register', { email, username: `optional${Date.now() % 1000000}`, password: PW, displayName: 'Optional' });
         assert.equal(reg.status, 201, JSON.stringify(reg.json));
         assert.equal(reg.json.requiresVerification, false);
+        assert.equal(reg.json.emailVerificationRequired, false, 'register response exposes policy mode, not just account state');
         assert.equal(reg.json.emailSent, false);
         const row = (await q('SELECT email_verified_at FROM auth_identities WHERE provider = $1 AND provider_user_id = $2 LIMIT 1', ['email', email]))[0];
         assert.equal(row.email_verified_at, null, 'stored identity remains unverified');
 
         const login = await b.must('/api/auth/login', { email, password: PW });
         assert.equal(login.json.requiresVerification, false);
+        assert.equal(login.json.emailVerificationRequired, false, 'login response carries server policy for UI messaging');
+        const session = await b.get('/api/auth/session');
+        assert.equal(session.status, 200);
+        assert.equal(session.json.emailVerificationRequired, false, 'session endpoint exposes server policy too');
 
         const s = cookieSocket(optional.port, b.cookieHeader);
         await until(() => s.welcome(), 'optional verification welcome');
