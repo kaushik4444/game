@@ -193,6 +193,38 @@ const matchOf = (over = {}) => ({ matchKey: uuid(), roomCode: 'ABCDEF', gameId: 
       assert.equal(info.authenticated, true);
       assert.equal(info.emailVerified, false, 'an unverified account has a session but is not allowed into the lobby');
     });
+    await test('email verification requirement toggle defaults to secure mode and only false/0 disables it', async () => {
+      const prev = process.env.REQUIRE_EMAIL_VERIFICATION;
+      try {
+        delete process.env.REQUIRE_EMAIL_VERIFICATION;
+        assert.equal(dbAuth.isEmailVerificationRequired(), true);
+        process.env.REQUIRE_EMAIL_VERIFICATION = 'maybe';
+        assert.equal(dbAuth.isEmailVerificationRequired(), true);
+        process.env.REQUIRE_EMAIL_VERIFICATION = 'false';
+        assert.equal(dbAuth.isEmailVerificationRequired(), false);
+        process.env.REQUIRE_EMAIL_VERIFICATION = '0';
+        assert.equal(dbAuth.isEmailVerificationRequired(), false);
+      } finally {
+        if (prev === undefined) delete process.env.REQUIRE_EMAIL_VERIFICATION;
+        else process.env.REQUIRE_EMAIL_VERIFICATION = prev;
+      }
+    });
+    await test('when verification is optional, session access is allowed but identity remains unverified in the database', async () => {
+      const prev = process.env.REQUIRE_EMAIL_VERIFICATION;
+      process.env.REQUIRE_EMAIL_VERIFICATION = 'false';
+      try {
+        const email = `opt.${Date.now()}@test.local`;
+        const reg = await dbAuth.registerEmail({ email, username: `opt${String(Date.now()).slice(-6)}`, password: 'TestPass123!', displayName: 'Optional' });
+        const info = await dbAuth.sessionInfo(reg.token);
+        assert.equal(info.authenticated, true);
+        assert.equal(info.emailVerified, true, 'lobby access gate is open when verification is optional');
+        const row = (await x.query('SELECT email_verified_at FROM auth_identities WHERE provider = $1 AND provider_user_id = $2 LIMIT 1', ['email', email])).rows[0];
+        assert.equal(row.email_verified_at, null, 'identity remains unverified in storage');
+      } finally {
+        if (prev === undefined) delete process.env.REQUIRE_EMAIL_VERIFICATION;
+        else process.env.REQUIRE_EMAIL_VERIFICATION = prev;
+      }
+    });
     await test('verification token is single-use and concurrency-safe', async () => {
       const email = `verify.${Date.now()}@test.local`;
       const reg = await dbAuth.registerEmail({ email, username: `verify${String(Date.now()).slice(-6)}`, password: 'TestPass123!', displayName: 'V' });

@@ -261,7 +261,7 @@
     S.username = out.player && out.player.username ? out.player.username : S.username;
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
     S.named = !!S.name;
-    S.emailVerified = !!(out.player && out.player.email_verified);
+    S.emailVerified = out.requiresVerification === false || !!(out.player && out.player.email_verified);
     S.signedOutIntentionally = false;
     store.set('ct_email_verified', S.emailVerified ? '1' : '0');
     if (S.name) store.set('ct_name', S.name);
@@ -283,15 +283,23 @@
     S.username = out.player && out.player.username ? out.player.username : String(username || '').toLowerCase();
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
     S.named = !!S.name;
-    S.emailVerified = !!(out.player && out.player.email_verified);
+    S.emailVerified = out.requiresVerification === false || !!(out.player && out.player.email_verified);
     S.signedOutIntentionally = false;
     store.set('ct_email_verified', S.emailVerified ? '1' : '0');
     if (S.name) store.set('ct_name', S.name);
     if (S.username) store.set('ct_username', S.username);
     if (S.avatar) store.set('ct_avatar', S.avatar);
-    openAuthSheet('login', out.emailSent === false
-      ? 'Account created — but the verification email could not be sent. Use “Resend verification email”, then verify and log in.'
-      : 'Account created. Check your email for a verification link, then log in here.');
+    if (out.requiresVerification) {
+      openAuthSheet('login', out.emailSent === false
+        ? 'Account created — but the verification email could not be sent. Use “Resend verification email”, then verify and log in.'
+        : 'Account created. Check your email for a verification link, then log in here.');
+      return;
+    }
+    closeOverlay();
+    connect();
+    toast(out.emailSent === false
+      ? 'Account created. You can play now; verification email delivery failed.'
+      : 'Account created. You can play now.');
   }
 
   async function doResendVerification() {

@@ -223,7 +223,7 @@ function cookieSocket(port, cookie) {
     await test('production mode: no token reaches scripts, cookies are Secure, a failed email does not strand the account, and account existence is not revealed', async () => {
       const mail = { sent: [], failNext: 0, assertReady() {}, async sendVerification(m) { if (this.failNext-- > 0) throw new Error('provider down'); this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset(m) { if (this.failNext-- > 0) throw new Error('provider down'); this.sent.push({ kind: 'reset', ...m }); } };
       const log = quiet();
-      const prod = await start({ ...fast, matchLog: quiet(), log, emailSender: mail, env: { ...process.env, NODE_ENV: 'production' } });
+      const prod = await start({ ...fast, matchLog: quiet(), log, emailSender: mail, env: { ...process.env, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'true' } });
       process.env.AUTH_SESSION_TTL_DAYS = '2';
       try {
         const b = new Browser(prod.port); await b.csrf();
@@ -261,6 +261,34 @@ function cookieSocket(port, cookie) {
         assert.equal(known.json.debug, undefined);
       } finally { delete process.env.AUTH_SESSION_TTL_DAYS; await prod.close(); }
     });
+    await test('when verification is optional, registration/login can proceed without verification and without fake verified status', async () => {
+      const mail = { sent: [], failNext: 0, assertReady() {}, async sendVerification(m) { if (this.failNext-- > 0) throw new Error('provider down'); this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset(m) { if (this.failNext-- > 0) throw new Error('provider down'); this.sent.push({ kind: 'reset', ...m }); } };
+      const optional = await start({ ...fast, matchLog: quiet(), log: quiet(), emailSender: mail, env: { ...process.env, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'false' } });
+      try {
+        const b = new Browser(optional.port); await b.csrf();
+        const email = `optional.${authSeq++}@test.local`;
+        mail.failNext = 1;
+        const reg = await b.post('/api/auth/register', { email, username: `optional${Date.now() % 1000000}`, password: PW, displayName: 'Optional' });
+        assert.equal(reg.status, 201, JSON.stringify(reg.json));
+        assert.equal(reg.json.requiresVerification, false);
+        assert.equal(reg.json.emailSent, false);
+        const row = (await q('SELECT email_verified_at FROM auth_identities WHERE provider = $1 AND provider_user_id = $2 LIMIT 1', ['email', email]))[0];
+        assert.equal(row.email_verified_at, null, 'stored identity remains unverified');
+
+        const login = await b.must('/api/auth/login', { email, password: PW });
+        assert.equal(login.json.requiresVerification, false);
+
+        const s = cookieSocket(optional.port, b.cookieHeader);
+        await until(() => s.welcome(), 'optional verification welcome');
+        s.ws.close();
+
+        // sensitive proof-of-email flow still requires verified status
+        const forgot = await b.post('/api/auth/forgot-password', { email });
+        assert.equal(forgot.status, 200);
+        assert.equal(forgot.json.debug, undefined, 'no reset token issued for unverified identity');
+      } finally { await optional.close(); }
+    });
+
     await test('housekeeping removes expired sessions, used tokens and old rate-limit rows, and keeps what is still valid', async () => {
       const dbAuth = require('../db/auth');
       const u = await newUser(srv, 'Purge');

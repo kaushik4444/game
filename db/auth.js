@@ -19,6 +19,13 @@ const positive = (v, fallback) => (Number.isFinite(Number(v)) && Number(v) > 0 ?
 const sessionTtlDays = () => positive(process.env.AUTH_SESSION_TTL_DAYS, 30);
 const verifyTtlMin = () => positive(process.env.AUTH_VERIFY_TTL_MIN, 60 * 24);
 const resetTtlMin = () => positive(process.env.AUTH_RESET_TTL_MIN, 30);
+const isEmailVerificationRequired = () => {
+  const raw = String(process.env.REQUIRE_EMAIL_VERIFICATION || '').trim().toLowerCase();
+  if (!raw) return true;
+  if (raw === 'true' || raw === '1') return true;
+  if (raw === 'false' || raw === '0') return false;
+  return true; // secure default on invalid value
+};
 const PROVIDER_EMAIL = 'email';
 const USERNAME_RE = /^[a-z0-9_]{3,24}$/;
 
@@ -219,6 +226,10 @@ async function loginEmail({ email, password }) {
   return makeSessionResult(row, await createSession(db, row.id));
 }
 
+function emailVerifiedForAccess(row) {
+  return !isEmailVerificationRequired() || Boolean(row && row.email_verified_at);
+}
+
 async function resendVerification({ email }) {
   if (!db.hasDatabase()) throw new AuthError('Email authentication requires PostgreSQL (set DATABASE_URL).', 503);
   const e = normEmail(email);
@@ -375,7 +386,7 @@ async function sessionInfo(rawToken) {
   const i = r.rows[0] || null;
   return {
     authenticated: true,
-    emailVerified: Boolean(i && i.email_verified_at),
+    emailVerified: emailVerifiedForAccess(i),
     provider: i ? i.provider : null,
     email: i ? i.email : null,
     player,
@@ -399,6 +410,7 @@ module.exports = {
   normEmail,
   sessionTtlDays,
   purgeExpired,
+  isEmailVerificationRequired,
   registerEmail,
   checkUsernameAvailability,
   loginEmail,
