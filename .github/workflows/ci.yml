@@ -1,0 +1,85 @@
+name: CI
+
+# Every pull request that targets main, and every push to main.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Least privilege: the workflow only needs to read the repository. No secrets are used anywhere.
+permissions:
+  contents: read
+
+# A newer push to the same branch/PR replaces a run that is still going.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # package.json engines: node >=18. 22 is what the Dockerfile and Render run; 20 is the previous LTS.
+        node: [20, 22]
+
+    # A disposable PostgreSQL that exists only for this job. tests/helpers/testdb.js connects to it, creates its own
+    # throw-away database (tv_test_<random>) for every test file and drops it afterwards. The user must be allowed to
+    # CREATE DATABASE (the image's default superuser is), and the pg tests also use pg_terminate_backend.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-password # throw-away container, not a secret
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        # the steps below only start once this reports healthy
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm # keyed on package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (syntax check)
+        run: npm run build
+
+      # DATABASE_URL and TEST_DATABASE_URL are deliberately not set here: these tests run on the in-memory store and
+      # the PostgreSQL files print SKIPPED. The PostgreSQL tests run in the next step, where they may not skip.
+      - name: Unit and server tests (in-memory)
+        run: npm test
+
+      - name: Wait for PostgreSQL
+        run: |
+          for i in $(seq 1 30); do
+            if PGPASSWORD=ci-only-password pg_isready -h 127.0.0.1 -p 5432 -U postgres; then exit 0; fi
+            sleep 2
+          done
+          echo "PostgreSQL did not become ready" >&2
+          exit 1
+
+      # `test:pg` passes --require, so a missing TEST_DATABASE_URL fails the run instead of skipping.
+      - name: PostgreSQL integration tests
+        run: npm run test:pg
+        env:
+          TEST_DATABASE_URL: postgres://postgres:ci-only-password@127.0.0.1:5432/postgres
