@@ -14,7 +14,7 @@
 
   const S = {
     id: null,
-    token: store.get('ct_token'), // issued by /api/auth/login or /api/auth/register
+    token: '', // short-lived websocket auth credential (never persisted)
     csrf: store.get('ct_csrf') || '',
     emailVerified: store.get('ct_email_verified') === '1',
     name: store.get('ct_name') || '',
@@ -136,7 +136,6 @@
   }
 
   async function hydrateSession() {
-    if (!S.token) return false;
     try {
       const r = await fetch('/api/auth/session', {
         headers: S.csrf ? { 'X-CSRF-Token': S.csrf } : {},
@@ -170,8 +169,10 @@
   function clearClientSession() {
     S.token = '';
     S.csrf = '';
-    store.set('ct_token', '');
+    S.emailVerified = false;
+    S.id = null;
     store.set('ct_csrf', '');
+    store.set('ct_email_verified', '0');
   }
 
   async function doLogoutAll() {
@@ -206,8 +207,6 @@
     await ensureCsrf();
     const out = await postJson('/api/auth/ws-token', {});
     if (!out || !out.token) throw new Error('Missing websocket token');
-    S.token = out.token;
-    store.set('ct_token', S.token);
     return out.token;
   }
 
@@ -243,7 +242,7 @@
 
   async function doLogin(email, password) {
     const out = await postJson('/api/auth/login', { email, password });
-    S.token = out.token || S.token;
+    S.token = '';
     if (out.csrfToken) {
       S.csrf = out.csrfToken;
       store.set('ct_csrf', out.csrfToken);
@@ -253,7 +252,6 @@
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
     S.named = !!S.name;
     S.emailVerified = !!(out.player && out.player.email_verified);
-    store.set('ct_token', S.token || '');
     store.set('ct_email_verified', S.emailVerified ? '1' : '0');
     if (S.name) store.set('ct_name', S.name);
     if (S.username) store.set('ct_username', S.username);
@@ -267,7 +265,7 @@
 
   async function doRegister(name, username, email, password) {
     const out = await postJson('/api/auth/register', { displayName: name, username, email, password, avatar: S.avatar || undefined });
-    S.token = out.token || S.token;
+    S.token = '';
     if (out.csrfToken) {
       S.csrf = out.csrfToken;
       store.set('ct_csrf', out.csrfToken);
@@ -277,7 +275,6 @@
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
     S.named = !!S.name;
     S.emailVerified = !!(out.player && out.player.email_verified);
-    store.set('ct_token', S.token || '');
     store.set('ct_email_verified', S.emailVerified ? '1' : '0');
     if (S.name) store.set('ct_name', S.name);
     if (S.username) store.set('ct_username', S.username);
@@ -320,19 +317,20 @@
   }
 
   async function connect() {
-    if (!S.token) {
-      try {
-        await wsAuthToken();
-      } catch {
-        renderAuth('', 'login');
-        return;
-      }
+    let wsToken;
+    try {
+      wsToken = await wsAuthToken();
+      S.token = wsToken;
+    } catch {
+      renderAuth('', 'login');
+      return;
     }
     ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
     ws.onopen = () => {
       retry = 0;
       $banner.hidden = true;
-      send({ t: 'hello', token: S.token || undefined });
+      send({ t: 'hello', token: wsToken || undefined });
+      S.token = '';
     };
     ws.onmessage = (e) => {
       let m;
@@ -451,7 +449,7 @@
     switch (m.t) {
       case 'welcome': {
         S.id = m.id;
-        S.token = m.token;
+        S.token = '';
         S.games = m.games;
         S.publicTables = m.tables || [];
         S.rejoin = m.rejoin || [];
@@ -460,7 +458,6 @@
         S.emotes = m.emotes || [];
         if (!S.name) S.name = m.name;
         if (!S.avatar) S.avatar = m.avatar;
-        store.set('ct_token', m.token);
         S.ready = true;
         const code = hashCode();
         if (code && !S.room) {
@@ -589,10 +586,6 @@
   }
 
   (async () => {
-    if (!S.token) {
-      renderAuth('', 'login');
-      return;
-    }
     await ensureCsrf();
     const ok = await hydrateSession();
     if (!ok) {

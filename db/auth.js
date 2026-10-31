@@ -58,6 +58,66 @@ async function revokeSession(rawToken) {
   return res.rowCount > 0;
 }
 
+async function revokeAllSessionsForCurrent(rawToken) {
+  if (!db.hasDatabase() || !rawToken) return { revoked: 0 };
+  const tokenHash = hashToken(rawToken);
+  return db.withTransaction(async (client) => {
+    const s = await client.query(
+      `SELECT player_id
+       FROM auth_sessions
+       WHERE token_hash = $1
+         AND revoked_at IS NULL
+         AND (expires_at IS NULL OR expires_at > NOW())
+       LIMIT 1`,
+      [tokenHash]
+    );
+    if (!s.rows.length) return { revoked: 0 };
+    const playerId = s.rows[0].player_id;
+    const out = await client.query('UPDATE auth_sessions SET revoked_at = NOW() WHERE player_id = $1 AND revoked_at IS NULL', [playerId]);
+    return { revoked: out.rowCount, playerId };
+  });
+}
+
+async function issueWebSocketTokenFromSession(rawToken) {
+  if (!db.hasDatabase() || !rawToken) throw new Error('Not authenticated.');
+  const tokenHash = hashToken(rawToken);
+  const r = await db.query(
+    `SELECT s.player_id, i.email_verified_at
+     FROM auth_sessions s
+     JOIN auth_identities i ON i.player_id = s.player_id AND i.provider = $2
+     WHERE s.token_hash = $1
+       AND s.revoked_at IS NULL
+       AND (s.expires_at IS NULL OR s.expires_at > NOW())
+     ORDER BY i.created_at ASC
+     LIMIT 1`,
+    [tokenHash, PROVIDER_EMAIL]
+  );
+  if (!r.rows.length) throw new Error('Not authenticated.');
+  if (!r.rows[0].email_verified_at) throw new Error('Please verify your email before entering the lobby.');
+  return { token: rawToken };
+}
+
+async function readSessionFromCookie(rawToken) {
+  if (!db.hasDatabase() || !rawToken) return null;
+  const tokenHash = hashToken(rawToken);
+  const r = await db.query(
+    `SELECT player_id
+     FROM auth_sessions
+     WHERE token_hash = $1
+       AND revoked_at IS NULL
+       AND (expires_at IS NULL OR expires_at > NOW())
+     LIMIT 1`,
+    [tokenHash]
+  );
+  return r.rows[0] || null;
+}
+
+async function revokeAllSessionsForPlayer(playerId) {
+  if (!db.hasDatabase() || !playerId) return { revoked: 0 };
+  const out = await db.query('UPDATE auth_sessions SET revoked_at = NOW() WHERE player_id = $1 AND revoked_at IS NULL', [playerId]);
+  return { revoked: out.rowCount };
+}
+
 async function createSession(client, playerId) {
   const raw = newRawToken();
   const tokenHash = hashToken(raw);
@@ -346,5 +406,9 @@ module.exports = {
   requestPasswordReset,
   resetPassword,
   revokeSession,
+  revokeAllSessionsForCurrent,
+  revokeAllSessionsForPlayer,
+  issueWebSocketTokenFromSession,
+  readSessionFromCookie,
   sessionInfo,
 };

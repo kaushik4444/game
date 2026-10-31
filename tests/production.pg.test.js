@@ -9,7 +9,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const WebSocket = require('ws');
-const { registerAndVerify } = require('./helpers/auth');
+const { registerAndVerify, post, getCsrf } = require('./helpers/auth');
 const testdb = require('./helpers/testdb');
 
 let passed = 0;
@@ -134,6 +134,45 @@ function client(port, name, token) {
       const r = await fetch(`http://127.0.0.1:${srv.port}/readyz`);
       assert.equal(r.status, 200);
       assert.match(await r.text(), /^ready/);
+    });
+    await test('logout revokes only current session; logout-all revokes all own sessions only', async () => {
+      const email = `logout.${Date.now()}@test.local`;
+      const username = `logout${Date.now().toString().slice(-6)}`;
+      const password = 'TestPass123!';
+      const csrf = await getCsrf(srv.port);
+      const reg = await post(srv.port, '/api/auth/register', { email, username, displayName: 'Logout User', password, avatar: '🧙' }, csrf);
+      const verifyToken = reg.json.debug.verifyToken;
+      await post(srv.port, '/api/auth/verify-email', { token: verifyToken }, { csrfToken: csrf.csrfToken, cookie: reg.cookie });
+      const loginA = await post(srv.port, '/api/auth/login', { email, password }, { csrfToken: csrf.csrfToken, cookie: reg.cookie });
+      const loginB = await post(srv.port, '/api/auth/login', { email, password }, { csrfToken: csrf.csrfToken, cookie: reg.cookie });
+
+      const otherEmail = `logout.other.${Date.now()}@test.local`;
+      const other = await post(srv.port, '/api/auth/register', { email: otherEmail, username: `other${Date.now().toString().slice(-6)}`, displayName: 'Other', password, avatar: '🧙' }, csrf);
+      await post(srv.port, '/api/auth/verify-email', { token: other.json.debug.verifyToken }, { csrfToken: csrf.csrfToken, cookie: other.cookie });
+      const otherLogin = await post(srv.port, '/api/auth/login', { email: otherEmail, password }, { csrfToken: csrf.csrfToken, cookie: other.cookie });
+
+      const wsA = await post(srv.port, '/api/auth/ws-token', {}, { csrfToken: csrf.csrfToken, cookie: loginA.cookie });
+      const wsB = await post(srv.port, '/api/auth/ws-token', {}, { csrfToken: csrf.csrfToken, cookie: loginB.cookie });
+      const wsOther = await post(srv.port, '/api/auth/ws-token', {}, { csrfToken: csrf.csrfToken, cookie: otherLogin.cookie });
+
+      await post(srv.port, '/api/auth/logout', {}, { csrfToken: csrf.csrfToken, cookie: loginA.cookie });
+      const cB = client(srv.port, 'B', wsB.json.token);
+      await cB.ready();
+      cB.ws.close();
+      const cA = client(srv.port, 'A', wsA.json.token);
+      await sleep(120);
+      assert.equal(cA.errors.length > 0 || cA.id == null, true, 'logged-out single session cannot connect');
+      cA.ws.close();
+
+      await post(srv.port, '/api/auth/logout-all', {}, { csrfToken: csrf.csrfToken, cookie: loginB.cookie });
+      const cB2 = client(srv.port, 'B2', wsB.json.token);
+      await sleep(120);
+      assert.equal(cB2.errors.length > 0 || cB2.id == null, true, 'logout-all revoked remaining own sessions');
+      cB2.ws.close();
+
+      const cOther = client(srv.port, 'Other', wsOther.json.token);
+      await cOther.ready();
+      cOther.ws.close();
     });
     hana.ws.close();
     await srv.close();

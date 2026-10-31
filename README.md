@@ -29,6 +29,8 @@ Tableverse uses PostgreSQL (Neon, Supabase, or self-hosted) for persistent playe
 - **Reliable saving**: a finished game is saved in the background and never delays play. A transient failure (lost connection, timeout, deadlock, database restarting) is retried up to 5 times over about 35 seconds; a permanent one (bad data, missing table) is not retried. Retrying is safe because of the match key. A result that still cannot be saved is **never** reported as saved: it is logged as `NOT SAVED` with the game, table and players, the table gets a "result could not be saved" message, and `/readyz` shows the counts. Before the first attempt the result is also written to a small spool file (`MATCH_SPOOL_DIR`, default the system temp folder, `off` to disable) and removed once the database has it; on the next start leftovers are replayed. On SIGTERM (a Render deploy) the server waits up to 15 s for pending writes. Limits: on a host with an ephemeral disk the spool survives a process restart but not a redeploy onto a fresh machine, and a hard crash (SIGKILL, power loss) between the game ending and the spool write loses that one result.
 - **What the stats mean**: a win is "you won": in Wizard the highest score (ties share), in 29 your **team** won, in Poker the biggest stack, in The Mind the **whole table** won (co-operative). *Best* is only shown where it is comparable: Wizard highest score; Poker the final stack as a multiple of the starting chips (a raw stack means different things after 1,000 and 5,000 chips); The Mind most levels cleared. 29 has no best score because a winning team always ends near the target.
 - **Abuse limits**: per-address caps on open sockets (40) and new accounts per hour (30), a site-wide cap on new accounts per minute (120) and on players in memory (5000), and WebSocket upgrades from other websites (foreign `Origin`) are refused. Add extra allowed origins with `ALLOWED_ORIGINS`. Behind Render's proxy set `TRUST_PROXY=1` (done in `render.yaml`).
+- **Account auth (Stage 1)**: sessions are persisted in an HttpOnly `ct_session` cookie (`SameSite=Lax`, `Secure` in production). The browser gets a CSRF token from `/api/auth/csrf` (or auth responses) and must send it in `X-CSRF-Token` + body `csrfToken` for state-changing auth endpoints. WebSocket auth uses `/api/auth/ws-token` and only issues a credential for an active, non-revoked, non-expired, email-verified session. `POST /api/auth/logout` revokes only the current session; `POST /api/auth/logout-all` revokes all active sessions for the current player.
+- **Transactional email**: production auth email delivery requires `EMAIL_PROVIDER=resend`, `EMAIL_FROM`, `PUBLIC_APP_URL`, and `RESEND_API_KEY`. If delivery fails, auth endpoints return an error instead of pretending mail was sent.
 - **Announcement banner**: set the `ANNOUNCEMENT` environment variable (max 200 characters, plain text) to show a dismissible 📣 notice on the home screen. Changing the text shows it again to players who dismissed the old one; unset it to remove the banner.
 - **Render Deployment**:
   1. Create a Web Service connected to your repository.
@@ -95,6 +97,25 @@ TEST_DATABASE_URL=postgres://postgres:secret@127.0.0.1:5432/postgres npm run tes
 ```
 
 Each run creates a throw-away database (`tv_test_<random>`) and drops it afterwards. The helper refuses managed hosts (Neon, Supabase, Render, AWS ...), the same server as your `DATABASE_URL` or `.env`, and any non-local host unless `ALLOW_REMOTE_TEST_DB=1` (never the managed hosts). Tests never use `DATABASE_URL`.
+
+Auth-focused local checks:
+
+```bash
+npm run build
+npm test
+TEST_DATABASE_URL=postgres://postgres:secret@127.0.0.1:5432/postgres npm run test:pg
+```
+
+Required auth env vars for deployment:
+
+- `DATABASE_URL`
+- `EMAIL_PROVIDER=resend`
+- `EMAIL_FROM`
+- `PUBLIC_APP_URL`
+- `RESEND_API_KEY`
+- optional auth tuning: `AUTH_SESSION_TTL_DAYS`, `AUTH_VERIFY_TTL_MIN`, `AUTH_RESET_TTL_MIN`, and `RL_*` auth rate-limit overrides.
+
+Do not use production Neon credentials for local or CI tests; keep `TEST_DATABASE_URL` pointed at a disposable local/dev PostgreSQL server.
 
 ## Notes
 

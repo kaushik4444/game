@@ -191,7 +191,7 @@ function start(opts = {}) {
     return csrf;
   }
 
-  const authTokenFromReq = (req, body) => (body && body.token) || readCookieToken(req);
+  const authTokenFromReq = (req) => readCookieToken(req);
 
   const server = http.createServer(async (req, res) => {
     let rel;
@@ -262,10 +262,10 @@ function start(opts = {}) {
       try {
         const body = await readJsonBody(req);
         validateCsrf(req, body);
-        const tok = authTokenFromReq(req, body);
-        await dbAuth.revokeSession(tok);
+        const tok = authTokenFromReq(req);
+        const out = await dbAuth.revokeAllSessionsForCurrent(tok);
         clearSession(res);
-        return sendJson(res, 200, { ok: true });
+        return sendJson(res, 200, { ok: true, revoked: out.revoked || 0 });
       } catch (err) {
         return sendJson(res, 400, { ok: false, error: err.message || 'Logout failed.' });
       }
@@ -276,10 +276,13 @@ function start(opts = {}) {
         const body = await readJsonBody(req);
         validateCsrf(req, body);
         const tok = readCookieToken(req);
-        if (!tok) return sendJson(res, 401, { ok: false, error: 'Not authenticated.' });
-        return sendJson(res, 200, { ok: true, token: tok });
+        const out = await dbAuth.issueWebSocketTokenFromSession(tok);
+        return sendJson(res, 200, { ok: true, token: out.token });
       } catch (err) {
-        return sendJson(res, 400, { ok: false, error: err.message || 'Could not issue websocket token.' });
+        const msg = err && err.message ? err.message : 'Could not issue websocket token.';
+        if (/Not authenticated/i.test(msg)) return sendJson(res, 401, { ok: false, error: 'Not authenticated.' });
+        if (/verify your email/i.test(msg)) return sendJson(res, 403, { ok: false, error: msg });
+        return sendJson(res, 400, { ok: false, error: msg });
       }
     }
 
@@ -287,7 +290,7 @@ function start(opts = {}) {
       try {
         const body = await readJsonBody(req);
         validateCsrf(req, body);
-        await dbAuth.revokeSession(authTokenFromReq(req, body));
+        await dbAuth.revokeSession(authTokenFromReq(req));
         clearSession(res);
         return sendJson(res, 200, { ok: true });
       } catch (err) {
@@ -353,7 +356,8 @@ function start(opts = {}) {
           { ...authRateConfig.forgotEmail, key: hashKey(normEmail(body.email)) },
         ]))) return;
         const out = await dbAuth.requestPasswordReset({ email: body.email });
-        if (out && out.resetToken && out.email && !includeDebugTokens) await deliverReset({ email: out.email, token: out.resetToken });        return sendJson(res, 200, {
+        if (out && out.resetToken && out.email && !includeDebugTokens) await deliverReset({ email: out.email, token: out.resetToken });
+        return sendJson(res, 200, {
           ok: true,
           ...(includeDebugTokens && out && out.resetToken ? { debug: { resetToken: out.resetToken } } : {}),
           message: 'If this account exists, a reset email has been sent.',
