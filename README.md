@@ -24,7 +24,7 @@ Tableverse uses PostgreSQL (Neon, Supabase, or self-hosted) for persistent playe
   npm run migrate
   ```
   They are also applied when the server boots, in one transaction under an advisory lock (two instances cannot race, and a failed migration changes nothing).
-- **Anonymous Player Accounts**: Guests are automatically provisioned with permanent internal UUIDs and bearer tokens hashed with SHA-256 before storage.
+- **Player accounts**: email + password accounts with a permanent internal player UUID. Guest access is disabled; the session is an HttpOnly cookie and only its SHA-256 hash is stored. Visitors can browse the home page, but must log in (and verify their email) to create or join a table.
 - **Completed Match Archive**: Every completed game is saved once (a per-game `match_key` makes recording idempotent) to `matches` and `match_participants`, all or nothing. Each game reports per-seat `results()` (score and winner). A player who left mid-game (a bot finished their seat) is kept in the record but not counted in stats. Matches written before results existed (no `match_key`) have unknown winners and are left out of stats.
 - **Reliable saving**: a finished game is saved in the background and never delays play. A transient failure (lost connection, timeout, deadlock, database restarting) is retried up to 5 times over about 35 seconds; a permanent one (bad data, missing table) is not retried. Retrying is safe because of the match key. A result that still cannot be saved is **never** reported as saved: it is logged as `NOT SAVED` with the game, table and players, the table gets a "result could not be saved" message, and `/readyz` shows the counts. Before the first attempt the result is also written to a small spool file (`MATCH_SPOOL_DIR`, default the system temp folder, `off` to disable) and removed once the database has it; on the next start leftovers are replayed. On SIGTERM (a Render deploy) the server waits up to 15 s for pending writes. Limits: on a host with an ephemeral disk the spool survives a process restart but not a redeploy onto a fresh machine, and a hard crash (SIGKILL, power loss) between the game ending and the spool write loses that one result.
 - **What the stats mean**: a win is "you won": in Wizard the highest score (ties share), in 29 your **team** won, in Poker the biggest stack, in The Mind the **whole table** won (co-operative). *Best* is only shown where it is comparable: Wizard highest score; Poker the final stack as a multiple of the starting chips (a raw stack means different things after 1,000 and 5,000 chips); The Mind most levels cleared. 29 has no best score because a winning team always ends near the target.
@@ -40,6 +40,14 @@ Tableverse uses PostgreSQL (Neon, Supabase, or self-hosted) for persistent playe
   4. Start Command: `npm start`
   5. Optional: set `ANNOUNCEMENT` to show a site-wide banner. `render.yaml` (service `tableverse`) declares both variables.
 
+
+## What's new in v0.5
+
+- **Account menu (top right)**: the avatar in the top bar opens a dropdown, like most sites: **Profile** (display name and avatar), **My stats**, **Settings**, **What's new** and **Log out** / **Log out everywhere**. It closes on an outside click or Escape and works with the keyboard. Visitors who are not signed in see **Log in** and **Sign up** instead.
+- **Settings**: sound on/off, clear the remembered recent tables, bring back a dismissed announcement, and log out everywhere.
+- **What's new** moved from a banner on the home page to the menu; a gold dot on the avatar shows when there is something you have not read.
+- **New home screen**: a hero with a greeting (or a sign-up call to action for visitors), a Quick join box for table codes, then sessions in progress, recent tables and the game list. The profile panel is gone from the home page; edit it from the menu.
+- **Cleanup**: the old `ct_token` value some browsers still hold in localStorage is deleted on load; it was never used by the cookie-based sessions.
 
 ## What's new in v0.2
 

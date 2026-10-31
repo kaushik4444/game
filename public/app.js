@@ -6,7 +6,10 @@
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
+    remove(k) { try { localStorage.removeItem(k); } catch { /* private mode */ } },
   };
+  // Older versions kept a bearer token here. The session is now an HttpOnly cookie, so the old value is never used: delete it.
+  store.remove('ct_token');
 
   const $app = document.getElementById('app');
   const $banner = document.getElementById('banner');
@@ -32,13 +35,14 @@
     chatOpen: false,
     unread: 0,
     skew: 0, // server clock minus this device's clock, for the turn countdown
-    dismissedWhatsNew: store.get('ct_wn') === '1',
     announcement: '',
     dismissedAnnouncement: store.get('ct_ann'), // the text that was dismissed, so a changed announcement shows again
     recentTables: (() => { try { return JSON.parse(store.get('ct_recent') || '[]'); } catch { return []; } })(),
     publicTables: [],
     rejoin: [], // running games where a bot is playing this player's seat
     avatarOpen: false,
+    menuOpen: false, // the account dropdown in the top bar
+    wnSeen: store.get('ct_wn_seen') || '', // the last What's new version this person opened
     createVisibility: 'private',
     sessionListOpen: store.get('ct_sessions_open') !== '0',
     guest: false, // true when the home screen is the public snapshot (no socket, no session)
@@ -609,7 +613,14 @@
   });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && S.auth) closeOverlay();
+    if (e.key !== 'Escape') return;
+    if (S.auth) closeOverlay();
+    else if (document.getElementById('modal-overlay')) closeModal();
+    else if (S.menuOpen) { closeMenu(); document.querySelector('.tb-avatar-btn')?.focus(); }
+  });
+  // a click anywhere outside the open account menu closes it
+  document.addEventListener('click', (e) => {
+    if (S.menuOpen && !e.target.closest('.menu-wrap')) closeMenu();
   });
 
   const verifyToken = new URLSearchParams(location.search).get('token');
@@ -619,15 +630,23 @@
       .catch((e) => { loadSnapshot(); openAuthSheet('login', e.message || 'Verification failed.'); });
   }
   if (location.pathname.endsWith('/reset-password.html') && verifyToken) {
-    const next = window.prompt('Enter your new password (8+ characters):');
-    if (next && next.length >= 8) {
-      postJson('/api/auth/reset-password', { token: verifyToken, newPassword: next })
-        .then(() => { loadSnapshot(); openAuthSheet('login', 'Password updated. You can log in with the new one.'); })
-        .catch((e) => { loadSnapshot(); openAuthSheet('login', e.message || 'Reset failed.'); });
-    } else {
-      loadSnapshot();
-      openAuthSheet('login', 'Please enter a password with at least 8 characters.');
-    }
+    // a real form (hidden password field, confirmation) instead of window.prompt, which shows the password in plain text
+    loadSnapshot();
+    openModal('Choose a new password', `<form id="resetForm" class="auth-form"><input id="resetPw" type="password" minlength="8" required placeholder="New password (8+ characters)" autocomplete="new-password"><input id="resetPw2" type="password" minlength="8" required placeholder="Repeat the password" autocomplete="new-password"><p id="resetMsg" class="auth-msg" role="status" hidden></p><button class="btn big" type="submit">Update password</button></form>`, (o) => {
+      o.querySelector('#resetForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const msg = o.querySelector('#resetMsg');
+        const show = (t) => { msg.textContent = t; msg.hidden = false; };
+        const pw = o.querySelector('#resetPw').value;
+        if (pw !== o.querySelector('#resetPw2').value) return show('The two passwords do not match.');
+        try {
+          await postJson('/api/auth/reset-password', { token: verifyToken, newPassword: pw });
+          closeModal();
+          history.replaceState(null, '', '/');
+          openAuthSheet('login', 'Password updated. Log in with the new one.');
+        } catch (err) { show(err.message || 'Reset failed. Ask for a new link.'); }
+      });
+    });
   }
 
   (async () => {
@@ -833,6 +852,125 @@
 
   const range = (s) => (s.min === s.max ? `${s.min} players` : `${s.min}–${s.max} players`);
 
+  // ------------------------------------------------------------ top bar, account menu and its dialogs
+  const WHATS_NEW_VERSION = '2026-11';
+  const WHATS_NEW = [
+    ['🔐', 'Accounts', 'Sign in with email and password. Your name, avatar and stats follow your account to every device.'],
+    ['🧑‍🎤', 'Account menu', 'Profile, settings, stats, what’s new and log out now live in the menu at the top right.'],
+    ['🌐', 'Public and private tables', 'A live table directory, one-tap rejoin and stronger 6-letter room codes.'],
+    ['📜', 'Play-by-play', 'Every table keeps an activity log of each play as it happens.'],
+    ['🧭', 'Coming soon', 'Saboteur, 6 nimmt! and UNO.'],
+  ];
+  const hasNewNews = () => S.wnSeen !== WHATS_NEW_VERSION;
+
+  function topbarHTML() {
+    const brand = '<a class="tb-brand" href="/" aria-label="Tableverse home"><span class="tb-mark">🂡</span><span class="tb-name">Tableverse</span></a>';
+    if (S.guest) {
+      return `<nav class="topbar" aria-label="Main">${brand}<div class="tb-right"><button type="button" class="btn ghost small" data-act="showLogin">Log in</button><button type="button" class="btn small" data-act="showRegister">Sign up</button></div></nav>`;
+    }
+    const name = S.named ? S.name : 'Player';
+    const av = `<span class="avatar tb-av" style="background:${avatarColor(name)}">${S.avatar ? esc(S.avatar) : initial(name)}</span>`;
+    const item = (act, icon, label, extra = '', cls = '') => `<button type="button" role="menuitem" class="menu-item ${cls}" data-act="${act}"><span class="mi-ico" aria-hidden="true">${icon}</span><span class="mi-label">${label}</span>${extra}</button>`;
+    const menu = S.menuOpen ? `<div class="menu" role="menu" aria-label="Account">
+        <div class="menu-head">${av}<div class="menu-who"><b>${esc(name)}</b>${S.username ? `<small>@${esc(S.username)}</small>` : ''}</div></div>
+        ${item('openProfile', '👤', 'Profile')}
+        ${item('stats', '📊', 'My stats')}
+        ${item('openSettings', '⚙️', 'Settings')}
+        ${item('openWhatsNew', '🎉', 'What’s new', hasNewNews() ? '<span class="mi-new">New</span>' : '')}
+        <div class="menu-sep" role="separator"></div>
+        ${item('logout', '🚪', 'Log out')}
+        ${item('logoutAll', '🔒', 'Log out everywhere', '', 'dim')}
+      </div>` : '';
+    return `<nav class="topbar" aria-label="Main">${brand}<div class="tb-right"><div class="menu-wrap"><button type="button" class="tb-avatar-btn" data-act="toggleMenu" aria-haspopup="menu" aria-expanded="${S.menuOpen}" aria-label="Account menu for ${esc(name)}">${av}${hasNewNews() ? '<span class="tb-dot" aria-hidden="true"></span>' : ''}<span class="tb-caret" aria-hidden="true">▾</span></button>${menu}</div></div></nav>`;
+  }
+
+  function closeMenu() {
+    if (!S.menuOpen) return false;
+    S.menuOpen = false;
+    render();
+    return true;
+  }
+
+  const modalActions = {};
+  function closeModal() {
+    const o = document.getElementById('modal-overlay');
+    if (o) o.remove();
+  }
+  function openModal(title, bodyHTML, onMount) {
+    closeModal();
+    const o = document.createElement('div');
+    o.id = 'modal-overlay';
+    o.className = 'overlay';
+    o.innerHTML = `<div class="sheet modal-sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="row modal-head"><h2>${esc(title)}</h2><button type="button" class="btn ghost small" data-modal-close aria-label="Close">✕</button></div><div class="modal-body">${bodyHTML}</div></div>`;
+    o.addEventListener('click', (e) => {
+      if (e.target === o || e.target.closest('[data-modal-close]')) return closeModal();
+      const el = e.target.closest('[data-modal-act]');
+      if (el && !el.disabled && Object.hasOwn(modalActions, el.dataset.modalAct)) modalActions[el.dataset.modalAct](el, o);
+    });
+    document.body.appendChild(o);
+    const first = o.querySelector('input, button:not([data-modal-close])');
+    if (first && !matchMedia('(pointer: coarse)').matches) first.focus();
+    if (onMount) onMount(o);
+  }
+
+  function openProfileDialog() {
+    const body = () => {
+      const name = S.named ? S.name : '';
+      const picks = S.avatars.map((a) => `<button type="button" class="av-pick ${a === S.avatar ? 'on' : ''}" data-modal-act="pickAvatar" data-a="${esc(a)}" aria-label="Avatar ${esc(a)}" aria-pressed="${a === S.avatar}">${esc(a)}</button>`).join('');
+      return `<div class="profile-header"><div class="profile-preview"><span class="avatar big" style="background:${avatarColor(name || 'Player')}">${S.avatar ? esc(S.avatar) : initial(name || 'Player')}</span><div class="profile-meta"><span class="profile-welcome">${name ? `Playing as <b>${esc(name)}</b>` : 'Choose a display name'}</span>${S.username ? `<span class="profile-user">@${esc(S.username)}</span>` : ''}<span class="profile-hint">Seen by friends at the table</span></div></div></div>
+        <label class="label" for="profileName">Display name</label>
+        <input id="profileName" type="text" maxlength="20" autocomplete="nickname" placeholder="Your nickname" value="${esc(name)}">
+        <span class="label" style="margin-top:6px">Avatar</span>
+        <div class="av-picks">${picks}</div>`;
+    };
+    openModal('Profile', body(), (o) => {
+      const redraw = () => {
+        const input = o.querySelector('#profileName');
+        const keep = input ? input.value : '';
+        o.querySelector('.modal-body').innerHTML = body();
+        const again = o.querySelector('#profileName');
+        if (again && keep !== again.value) again.value = keep;
+      };
+      modalActions.pickAvatar = (el) => {
+        S.avatar = el.dataset.a;
+        store.set('ct_avatar', S.avatar);
+        send({ t: 'setName', name: S.name || undefined, avatar: S.avatar });
+        redraw();
+        render();
+      };
+      let timer = null;
+      o.addEventListener('input', (e) => {
+        if (e.target.id !== 'profileName') return;
+        S.name = e.target.value.trim().slice(0, 20);
+        S.named = !!S.name;
+        if (S.name) store.set('ct_name', S.name);
+        clearTimeout(timer);
+        timer = setTimeout(() => { if (S.name) { send({ t: 'setName', name: S.name, avatar: S.avatar || undefined }); render(); } }, 400);
+      });
+    });
+  }
+
+  function openSettingsDialog() {
+    const body = () => `<div class="setting-row"><div><b>Sound effects</b><small>Card sounds, turn alerts and fanfares.</small></div><button type="button" class="btn ${CardTable.sound.isMuted() ? 'ghost' : ''} small" data-modal-act="toggleSound" aria-pressed="${!CardTable.sound.isMuted()}">${CardTable.sound.isMuted() ? 'Off' : 'On'}</button></div>
+      <div class="setting-row"><div><b>Recent tables</b><small>${S.recentTables.length ? `${S.recentTables.length} remembered on this device.` : 'Nothing remembered on this device.'}</small></div><button type="button" class="btn ghost small" data-modal-act="clearRecent" ${S.recentTables.length ? '' : 'disabled'}>Clear</button></div>
+      <div class="setting-row"><div><b>Announcements</b><small>Show the site banner again if you dismissed it.</small></div><button type="button" class="btn ghost small" data-modal-act="showAnnouncement" ${S.announcement && S.dismissedAnnouncement === S.announcement ? '' : 'disabled'}>Show</button></div>
+      <div class="setting-row"><div><b>Account</b><small>${S.username ? `Signed in as @${esc(S.username)}.` : 'Signed in.'} Signing out everywhere ends every session on every device.</small></div><button type="button" class="btn ghost small" data-modal-act="logoutAllFromSettings">Log out everywhere</button></div>`;
+    openModal('Settings', body(), (o) => {
+      const redraw = () => { o.querySelector('.modal-body').innerHTML = body(); };
+      modalActions.toggleSound = () => { CardTable.sound.toggle(); redraw(); };
+      modalActions.clearRecent = () => { S.recentTables = []; store.set('ct_recent', '[]'); redraw(); render(); };
+      modalActions.showAnnouncement = () => { S.dismissedAnnouncement = null; store.remove('ct_ann'); redraw(); render(); };
+      modalActions.logoutAllFromSettings = () => { closeModal(); doLogoutAll(); };
+    });
+  }
+
+  function openWhatsNewDialog() {
+    S.wnSeen = WHATS_NEW_VERSION;
+    store.set('ct_wn_seen', S.wnSeen);
+    render();
+    openModal('What’s new', `<ul class="wn-list">${WHATS_NEW.map(([ico, t, d]) => `<li><span class="wn-ico" aria-hidden="true">${ico}</span><div><b>${esc(t)}</b><p>${esc(d)}</p></div></li>`).join('')}</ul>`);
+  }
+
   function render() {
     // keep the cursor in the name box when the screen is redrawn (e.g. someone joins while you type)
     const ae = document.activeElement;
@@ -878,20 +1016,33 @@
       </article>`
       )
       .join('');
+    const who = S.guest ? '' : (S.named ? S.name : '');
     $app.innerHTML = `
+    ${topbarHTML()}
     <main class="page wide home-arena">
-      <header class="brand">
-        <span class="brand-snd">${CardTable.sound.button()}</span>
-        <div class="arena-tag">⚔️ MULTIPLAYER ARENA</div>
-        <div class="mark">🂡</div>
-        <h1>Tableverse</h1>
-        <p class="brand-desc">Your friends. Your games. One table. Real-time multiplayer with instant rooms, smart bots, authentic gameplay — right in your browser.</p>
-        <div class="arena-features">
-          <span class="feat-badge">✨ No app install required</span>
-          <span class="feat-badge">📱 Mobile & desktop ready</span>
-          <span class="feat-badge">🛡️ Fair hidden-state deals</span>
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="arena-tag">⚔️ Multiplayer card tables</div>
+          <h1>${who ? `Welcome back, <span class="hero-name">${esc(who)}</span>` : 'Your friends. Your games. <span class="hero-name">One table.</span>'}</h1>
+          <p class="brand-desc">${S.guest ? 'Real-time Wizard, 29, Poker and The Mind with instant rooms and smart bots that fill any empty seat. Right in your browser.' : 'Pick a game, open a table and send the link, or jump back in with a code. Bots fill any empty seat.'}</p>
+          ${S.guest ? `<div class="row hero-cta"><button type="button" class="btn big" data-act="showRegister">Create free account</button><button type="button" class="btn ghost big" data-act="showLogin">Log in</button></div>` : `<div class="row hero-cta"><button type="button" class="btn big" data-act="scrollGames">Choose a game</button><button type="button" class="btn ghost big" data-act="stats">📊 My stats</button></div>`}
+          <div class="arena-features">
+            <span class="feat-badge">✨ No install</span>
+            <span class="feat-badge">📱 Phone &amp; desktop</span>
+            <span class="feat-badge">🛡️ Fair hidden-state deals</span>
+          </div>
         </div>
-      </header>
+        <section class="panel join-panel">
+          <div class="panel-tag">QUICK JOIN</div>
+          <label class="label" for="code">Have a table code?</label>
+          <p class="join-sub">Enter the 6-letter code from your friend to sit down straight away.</p>
+          <form class="join-form" id="joinForm">
+            <input id="code" type="text" maxlength="6" placeholder="ABCDEF" autocomplete="off" autocapitalize="characters" spellcheck="false" value="${esc(S.draftCode)}">
+            <button class="btn big-join" type="submit">Join</button>
+          </form>
+          <div class="join-tips">Or open an invite link: <code>site/#CODE</code></div>
+        </section>
+      </section>
       ${rejoinBannerHTML()}
       ${S.announcement && S.dismissedAnnouncement !== S.announcement ? `
       <div class="whats-new announcement panel" role="status">
@@ -899,60 +1050,11 @@
         <div class="wn-content">${esc(S.announcement)}</div>
         <button class="wn-close" data-act="dismissAnnouncement" aria-label="Dismiss announcement">✕</button>
       </div>` : ''}
-      ${S.dismissedWhatsNew ? '' : `
-      <div class="whats-new panel">
-        <span class="wn-icon">🎉</span>
-        <div class="wn-content">
-          <b>What's New in Tableverse Arena</b>
-          Public &amp; private tables with live session discovery, real-time play-by-play game activity log, stronger 6-character room codes, recent tables with live status, and upcoming roadmap games (Saboteur, 6 nimmt!, UNO)!
-        </div>
-        <button class="wn-close" data-act="dismissWhatsNew" aria-label="Dismiss">✕</button>
-      </div>`}
-      <div class="home-grid">
-        ${S.guest ? `
-        <section class="panel profile-panel">
-          <div class="panel-tag">PLAYER ACCOUNT</div>
-          <div class="profile">
-            <div class="profile-header">
-              <div class="profile-preview">
-                <span class="avatar big" style="background:hsl(260 55% 42%)">${esc(S.avatar || '★')}</span>
-                <div class="profile-meta">
-                  <span class="profile-welcome">${S.name ? `Welcome back, <b>${esc(S.name)}</b>` : 'Browse freely — log in to play'}</span>
-                  <span class="profile-hint">An account keeps your name, avatar and stats</span>
-                </div>
-              </div>
-            </div>
-            <div class="row" style="margin-top:12px;gap:8px;flex-wrap:wrap">
-              <button type="button" class="btn" data-act="showAuth">Log in</button>
-              <button type="button" class="btn ghost" data-act="showRegister">Create account</button>
-            </div>
-          </div>
-        </section>` : `
-        <section class="panel profile-panel">
-          <div class="panel-tag">PLAYER IDENTITY</div>
-          ${profileHTML()}
-          <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap">
-            <button type="button" class="btn ghost stats-open" data-act="stats">📊 My stats</button>
-            <button type="button" class="btn ghost small" data-act="logout">Log out</button>
-            <button type="button" class="btn ghost small" data-act="logoutAll">Log out all</button>
-          </div>
-        </section>`}
-        <section class="panel join-panel">
-          <div class="panel-tag">QUICK ACCESS</div>
-          <label class="label" for="code">Have a table code? Jump in</label>
-          <p class="join-sub">Enter the 6-letter code shared by your friend to join their game table immediately.</p>
-          <form class="join-form" id="joinForm">
-            <input id="code" type="text" maxlength="6" placeholder="ABCDEF" autocomplete="off" autocapitalize="characters" spellcheck="false" value="${esc(S.draftCode)}">
-            <button class="btn big-join" type="submit">Join Table</button>
-          </form>
-          <div class="join-tips">💡 Anyone can also join via direct link: <code>site/#CODE</code></div>
-        </section>
-      </div>
       ${publicTablesHTML()}
       ${recentTablesHTML()}
-      <div class="section-head">
-        <h2 class="section">Featured Games</h2>
-        <span class="section-sub">Pick a card game and host a private table for your friends</span>
+      <div class="section-head" id="games">
+        <h2 class="section">Games</h2>
+        <span class="section-sub">Pick a game and host a table for your friends</span>
       </div>
       <section class="game-grid">${tiles}</section>
       <a class="panel tool-tile" href="/scorecard.html"><span class="tool-ico">📝</span><span><b>Wizard scorecard</b><br><small>Playing with a real deck? Enter bids and tricks each round and the scores are worked out for you. Works offline.</small></span></a>
@@ -1150,8 +1252,13 @@
       send({ t: 'setName', name: S.name || undefined, avatar: S.avatar });
       render();
     },
+    scrollGames: () => document.getElementById('games')?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }),
+    toggleMenu: () => { S.menuOpen = !S.menuOpen; render(); },
+    openProfile: () => { S.menuOpen = false; render(); openProfileDialog(); },
+    openSettings: () => { S.menuOpen = false; render(); openSettingsDialog(); },
+    openWhatsNew: () => { S.menuOpen = false; openWhatsNewDialog(); },
     toggleAvatars: () => { S.avatarOpen = !S.avatarOpen; render(); },
-    stats: () => (authed() ? openStats() : gateLogin(() => openStats())),
+    stats: () => { if (S.menuOpen) { S.menuOpen = false; render(); } return authed() ? openStats() : gateLogin(() => openStats()); },
     emotes: () => toggleEmoteBar(),
     activityLog: () => openActivityLog(),
     sound: () => { CardTable.sound.toggle(); render(); },
@@ -1184,13 +1291,8 @@
       store.set('ct_ann', S.announcement);
       render();
     },
-    dismissWhatsNew: () => {
-      S.dismissedWhatsNew = true;
-      store.set('ct_wn', '1');
-      render();
-    },
-    logout: () => { doLogout(); },
-    logoutAll: () => { doLogoutAll(); },
+    logout: () => { S.menuOpen = false; doLogout(); },
+    logoutAll: () => { S.menuOpen = false; doLogoutAll(); },
     copyLink: async () => {
       try {
         await navigator.clipboard.writeText(inviteUrl());
