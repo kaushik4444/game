@@ -19,8 +19,8 @@ const positive = (v, fallback) => (Number.isFinite(Number(v)) && Number(v) > 0 ?
 const sessionTtlDays = () => positive(process.env.AUTH_SESSION_TTL_DAYS, 30);
 const verifyTtlMin = () => positive(process.env.AUTH_VERIFY_TTL_MIN, 60 * 24);
 const resetTtlMin = () => positive(process.env.AUTH_RESET_TTL_MIN, 30);
-const isEmailVerificationRequired = () => {
-  const raw = String(process.env.REQUIRE_EMAIL_VERIFICATION || '').trim().toLowerCase();
+const isEmailVerificationRequired = (env = process.env) => {
+  const raw = String(env.REQUIRE_EMAIL_VERIFICATION || '').trim().toLowerCase();
   if (!raw) return true;
   if (raw === 'true' || raw === '1') return true;
   if (raw === 'false' || raw === '0') return false;
