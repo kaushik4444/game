@@ -263,6 +263,9 @@ function cookieSocket(port, cookie) {
     });
     await test('when verification is optional, registration/login can proceed without verification and without fake verified status', async () => {
       const mail = { sent: [], failNext: 0, assertReady() {}, async sendVerification(m) { if (this.failNext-- > 0) throw new Error('provider down'); this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset(m) { if (this.failNext-- > 0) throw new Error('provider down'); this.sent.push({ kind: 'reset', ...m }); } };
+      // This scenario runs after other auth tests that may have already used the same test-run IP key.
+      // Isolate only the registration limiter scopes used here.
+      await q("DELETE FROM auth_rate_limits WHERE scope IN ('auth:register:ip', 'auth:register:email')");
       const testRateLimits = {
         RL_REGISTER_IP_LIMIT: '100',
         RL_REGISTER_EMAIL_LIMIT: '100',
