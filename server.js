@@ -167,6 +167,10 @@ function start(opts = {}) {
       else dbPool.ping().then(() => ok('ready' + tail), () => { res.writeHead(503, { 'Content-Type': 'text/plain' }); res.end('database unavailable'); });
       return;
     }
+    // Public snapshot for visitors: the home page shows the game list and the table directory without a session or a socket.
+    if (rel === '/api/games') {
+      return sendJson(res, 200, { ok: true, games: games.list(), tables: publicTables(), announcement });
+    }
     if (rel.includes('\0')) {
       res.writeHead(400);
       return res.end();

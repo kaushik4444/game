@@ -28,7 +28,6 @@
     avatars: [],
     emotes: [],
     named: !!store.get('ct_name'),
-    invite: '',
     chat: [],
     chatOpen: false,
     unread: 0,
@@ -42,6 +41,9 @@
     avatarOpen: false,
     createVisibility: 'private',
     sessionListOpen: store.get('ct_sessions_open') !== '0',
+    guest: false, // true when the home screen is the public snapshot (no socket, no session)
+    auth: null, // the open auth sheet: 'login' or 'register'
+    pending: [], // play actions that wait for a successful login, then run once the lobby opens
   };
   const plugins = {};
   let ws = null;
@@ -163,11 +165,13 @@
     } catch {
       // ignore network failures; clear local state regardless
     }
+    S.signedOutIntentionally = true;
     clearClientSession();
     S.ready = false;
     S.room = null;
     S.view = null;
-    renderAuth('You have been logged out.', 'login');
+    loadSnapshot();
+    toast('Logged out everywhere.');
   }
 
   async function doLogout() {
@@ -176,41 +180,73 @@
     } catch {
       // ignore network failures; clear local state regardless
     }
+    S.signedOutIntentionally = true;
     clearClientSession();
     S.ready = false;
     S.room = null;
     S.view = null;
-    renderAuth('Logged out.', 'login');
+    loadSnapshot();
+    toast('Logged out.');
   }
 
-  function authPageHTML(tab = 'login', msg = '') {
+  // The auth sheet: a small dialog over the (public) home page. Logging in is never a place you get sent to —
+  // it is a step you take when you try to play, and afterwards you land where you were heading.
+  function openAuthSheet(tab = 'login', msg = '') {
+    S.auth = tab;
+    closeOverlay();
     const loginOn = tab === 'login';
-    return `<main class="page" style="max-width:560px">
-      <header class="brand"><span class="brand-snd">${CardTable.sound.button()}</span><div class="mark">🂡</div><h1>Tableverse</h1><p>Sign in to play. Guest mode is disabled.</p></header>
-      ${msg ? `<section class="panel"><p class="hint" style="color:#f7d37b">${esc(msg)}</p></section>` : ''}
-      <section class="panel">
-        <div class="row" style="gap:8px;margin-bottom:10px"><button class="btn ${loginOn ? '' : 'ghost'}" data-act="showLogin">Log in</button><button class="btn ${loginOn ? 'ghost' : ''}" data-act="showRegister">Create account</button></div>
-        ${loginOn ? `
-          <form id="loginForm" class="join-form">
-            <input id="loginEmail" type="email" required placeholder="Email">
-            <input id="loginPassword" type="password" required minlength="8" placeholder="Password">
-            <button class="btn big-join" type="submit">Log in</button>
-          </form>
-          <div class="row" style="margin-top:10px"><button class="btn ghost small" data-act="forgotPassword">Forgot password?</button><button class="btn ghost small" data-act="resendVerification">Resend verification email</button></div>
-        ` : `
-          <form id="registerForm" class="join-form">
-            <input id="registerName" type="text" maxlength="20" required placeholder="Display name">
-            <input id="registerUsername" type="text" maxlength="24" required pattern="[a-z0-9_]{3,24}" placeholder="Username (lowercase, numbers, _)">
-            <small class="hint">Lowercase only, 3-24 chars.</small>
-            <small id="registerUsernameHint" class="hint"></small>
-            <input id="registerEmail" type="email" required placeholder="Email">
-            <input id="registerPassword" type="password" required minlength="8" placeholder="Password (8+ chars)">
-            <button class="btn big-join" type="submit">Create account</button>
-          </form>
-        `}
-      </section>
-      <section class="panel"><small class="hint">Google sign-in and account linking will be added in Stage 2.</small></section>
-    </main>`;
+    const overlay = document.createElement('div');
+    overlay.id = 'auth-overlay';
+    overlay.className = 'overlay';
+    overlay.innerHTML = `<div class="sheet auth-sheet" data-stop="1" role="dialog" aria-label="${loginOn ? 'Log in' : 'Create account'}">
+      <div class="row" style="justify-content:space-between"><h2>${loginOn ? 'Welcome back' : 'Create your account'}</h2><button class="btn ghost small" data-auth-close aria-label="Close">✕</button></div>
+      ${msg ? `<p class="auth-msg" role="status">${esc(msg)}</p>` : ''}
+      <div class="row auth-tabs">
+        <button class="btn ${loginOn ? '' : 'ghost'} small" data-act="showLogin">Log in</button>
+        <button class="btn ${loginOn ? 'ghost' : ''} small" data-act="showRegister">Create account</button>
+      </div>
+      ${loginOn ? `
+        <form id="loginForm" class="auth-form">
+          <input id="loginEmail" type="email" required placeholder="Email" autocomplete="email">
+          <input id="loginPassword" type="password" required minlength="8" placeholder="Password" autocomplete="current-password">
+          <button class="btn big" type="submit">Log in</button>
+        </form>
+        <div class="row auth-links"><button class="btn ghost small" data-act="forgotPassword">Forgot password?</button><button class="btn ghost small" data-act="resendVerification">Resend verification email</button></div>
+      ` : `
+        <form id="registerForm" class="auth-form">
+          <input id="registerName" type="text" maxlength="20" required placeholder="Display name" autocomplete="nickname">
+          <input id="registerUsername" type="text" maxlength="24" required pattern="[a-z0-9_]{3,24}" placeholder="Username (lowercase)" autocomplete="username">
+          <small id="registerUsernameHint" class="hint"></small>
+          <input id="registerEmail" type="email" required placeholder="Email" autocomplete="email">
+          <input id="registerPassword" type="password" required minlength="8" placeholder="Password (8+ characters)" autocomplete="new-password">
+          <button class="btn big" type="submit">Create account</button>
+        </form>
+      `}
+    </div>`;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay || e.target.closest('[data-auth-close]')) closeOverlay(); });
+    document.body.appendChild(overlay);
+    const first = document.getElementById(loginOn ? 'loginEmail' : 'registerName');
+    if (first && !matchMedia('(pointer: coarse)').matches) first.focus();
+    if (!loginOn) {
+      const u = document.getElementById('registerUsername');
+      if (u) u.addEventListener('input', async () => {
+        const hint = document.getElementById('registerUsernameHint');
+        const value = String(u.value || '').trim().toLowerCase();
+        if (!hint) return;
+        if (!value) { hint.textContent = ''; return; }
+        if (!/^[a-z0-9_]{3,24}$/.test(value)) { hint.textContent = 'Use 3-24 chars: lowercase letters, numbers, underscore.'; return; }
+        try {
+          const out = await fetch(`/api/auth/username-available?username=${encodeURIComponent(value)}`).then((r) => r.json());
+          hint.textContent = out.available ? 'Username is available.' : 'Username is already taken.';
+        } catch { hint.textContent = ''; }
+      });
+    }
+  }
+
+  function closeOverlay() {
+    const el = document.getElementById('auth-overlay');
+    if (el) el.remove();
+    S.auth = null;
   }
 
   async function doLogin(email, password) {
@@ -222,14 +258,16 @@
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
     S.named = !!S.name;
     S.emailVerified = !!(out.player && out.player.email_verified);
+    S.signedOutIntentionally = false;
     store.set('ct_email_verified', S.emailVerified ? '1' : '0');
     if (S.name) store.set('ct_name', S.name);
     if (S.username) store.set('ct_username', S.username);
     if (S.avatar) store.set('ct_avatar', S.avatar);
     if (!S.emailVerified) {
-      renderAuth('Please verify your email before entering the lobby.');
+      openAuthSheet('login', 'Please verify your email before playing. Use “Resend verification email” if the link did not arrive.');
       return;
     }
+    closeOverlay();
     connect();
   }
 
@@ -242,11 +280,14 @@
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
     S.named = !!S.name;
     S.emailVerified = !!(out.player && out.player.email_verified);
+    S.signedOutIntentionally = false;
     store.set('ct_email_verified', S.emailVerified ? '1' : '0');
     if (S.name) store.set('ct_name', S.name);
     if (S.username) store.set('ct_username', S.username);
     if (S.avatar) store.set('ct_avatar', S.avatar);
-    renderAuth(out.emailSent === false ? (out.message || 'Account created, but the verification email could not be sent.') : 'Account created. Check your email for a verification link.');
+    openAuthSheet('login', out.emailSent === false
+      ? 'Account created — but the verification email could not be sent. Use “Resend verification email”, then verify and log in.'
+      : 'Account created. Check your email for a verification link, then log in here.');
   }
 
   async function doResendVerification() {
@@ -268,29 +309,6 @@
       toast('If this account exists, a reset link has been sent.');
     } catch (e) {
       toast(e.message || 'Could not send reset link');
-    }
-  }
-
-  function renderAuth(msg = '', tab = 'login') {
-    S.ready = false;
-    S.room = null;
-    S.view = null;
-    $app.innerHTML = authPageHTML(tab, msg);
-    const u = document.getElementById('registerUsername');
-    if (u) {
-      u.addEventListener('input', async () => {
-        const hint = document.getElementById('registerUsernameHint');
-        const value = String(u.value || '').trim().toLowerCase();
-        if (!hint) return;
-        if (!value) { hint.textContent = ''; return; }
-        if (!/^[a-z0-9_]{3,24}$/.test(value)) { hint.textContent = 'Use 3-24 chars: lowercase letters, numbers, underscore.'; return; }
-        try {
-          const out = await fetch(`/api/auth/username-available?username=${encodeURIComponent(value)}`).then((r) => r.json());
-          hint.textContent = out.available ? 'Username is available.' : 'Username is already taken.';
-        } catch {
-          hint.textContent = '';
-        }
-      });
     }
   }
 
@@ -317,10 +335,12 @@
       if (e.code === 4001) { // signed out elsewhere, or the password was reset
         clearClientSession();
         $banner.hidden = true;
-        renderAuth('You have been signed out. Please log in again.', 'login');
+        loadSnapshot();
+        if (S.signedOutIntentionally) S.signedOutIntentionally = false; // this tab clicked Log out: show the public home, do not nag
+        else openAuthSheet('login', 'You have been signed out. Please log in again.');
         return;
       }
-      if (e.code === 1008) return; // refused (not logged in, not verified): the login screen is already showing, do not loop
+      if (e.code === 1008) return; // refused (not logged in, not verified): the login sheet is already showing, do not loop
       $banner.textContent = 'Reconnecting…';
       $banner.hidden = false;
       setTimeout(connect, Math.min(5000, 500 * 2 ** retry++));
@@ -366,15 +386,48 @@
     return S.publicTables.find((t) => t.code === code) || null;
   }
 
+  /** Home data for visitors (no socket): the public games list, the live table directory and the site announcement. */
+  async function loadSnapshot() {
+    S.guest = true;
+    S.rejoin = []; // a stale "your game is waiting" banner must not survive into guest browsing
+    try {
+      const r = await fetch('/api/games', { credentials: 'same-origin' });
+      const out = await r.json();
+      if (out && out.ok) {
+        S.games = out.games || [];
+        S.publicTables = out.tables || [];
+        S.announcement = typeof out.announcement === 'string' ? out.announcement : '';
+      }
+    } catch { /* offline: the home screen still renders, just without live data */ }
+    render();
+  }
+
+  /** Play actions need a live lobby session: guests are asked to log in, and the action they tapped runs right after. */
+  const authed = () => !S.guest && !!ws && ws.readyState === 1;
+  function gateLogin(fn) {
+    if (authed()) {
+      fn();
+      return;
+    }
+    S.pending = [fn];
+    if (!S.guest) {
+      // logged in with a valid session, the socket is just down: keep the action for the reconnect instead of nagging
+      if (!ws || ws.readyState >= 2) connect();
+      return;
+    }
+    const code = hashCode();
+    openAuthSheet('login', code ? `Log in to join table ${code}.` : 'Log in to play — you will go straight where you tapped.');
+  }
+
   function tableJoinModeOptions(t) {
     if (!t) return ['join', 'spectate'];
     if (t.status === 'playing') return ['spectate'];
     return ['join', 'spectate'];
   }
 
-  function openJoinModeDialog(code, t) {
+  function openJoinModeDialog(code, t, onPick) {
     const modes = tableJoinModeOptions(t);
-    if (modes.length === 1) return joinTable(code, modes[0]);
+    if (modes.length === 1) return onPick(modes[0]);
     const overlay = document.createElement('div');
     overlay.className = 'overlay';
     const label = t
@@ -389,13 +442,15 @@
       const pick = e.target.closest('[data-join-mode]');
       if (!pick) return;
       overlay.remove();
-      joinTable(code, pick.dataset.joinMode);
+      onPick(pick.dataset.joinMode);
     });
     document.body.appendChild(overlay);
   }
 
+  /** Joining any table (directory, recent, code box or invite link) goes through the same gate: guests are asked to log in first. */
   function askJoinMode(code, t) {
-    openJoinModeDialog(code, t);
+    if (!authed()) return gateLogin(() => askJoinMode(code, tableByCode(code)));
+    openJoinModeDialog(code, t, (mode) => joinTable(code, mode));
   }
 
   function publicTableAction(t) {
@@ -427,6 +482,7 @@
       case 'welcome': {
         S.id = m.id;
         S.token = '';
+        S.guest = false;
         S.games = m.games;
         S.publicTables = m.tables || [];
         S.rejoin = m.rejoin || [];
@@ -436,18 +492,24 @@
         if (!S.name) S.name = m.name;
         if (!S.avatar) S.avatar = m.avatar;
         S.ready = true;
+        render();
+        const queue = S.pending;
+        S.pending = [];
+        for (const fn of queue) {
+          try { fn(); } catch { /* a stale action must not break the session */ }
+        }
         const code = hashCode();
-        if (code && !S.room) {
+        if (code && !S.room && !queue.length) {
           const t = tableByCode(code);
           askJoinMode(code, t);
         }
-        render();
         break;
       }
       case 'authRequired':
         clearClientSession();
         S.ready = false;
-        renderAuth(m.message || 'Please log in to continue.');
+        loadSnapshot();
+        openAuthSheet('login', m.message || 'Log in to play.');
         break;
       case 'stats':
         drawStats(m.stats);
@@ -477,7 +539,6 @@
         S.room = m.room;
         S.view = m.view;
         rememberTable(m.room);
-        S.invite = '';
         S.skew = (m.room.now || Date.now()) - Date.now();
         setHash(m.room.code);
         soundsFor(prevView, m.view);
@@ -520,7 +581,7 @@
       try {
         await doLogin(email, password);
       } catch (err) {
-        renderAuth(err.message || 'Login failed', 'login');
+        openAuthSheet('login', err.message || 'Login failed');
       }
     }
     if (e.target.id === 'registerForm') {
@@ -532,7 +593,7 @@
       try {
         await doRegister(name, username, email, password);
       } catch (err) {
-        renderAuth(err.message || 'Registration failed', 'register');
+        openAuthSheet('register', err.message || 'Registration failed');
       }
     }
   });
@@ -540,26 +601,32 @@
   document.addEventListener('click', async (e) => {
     const a = e.target.closest('[data-act]');
     if (!a) return;
-    if (a.dataset.act === 'showLogin') return renderAuth('', 'login');
-    if (a.dataset.act === 'showRegister') return renderAuth('', 'register');
+    if (a.dataset.act === 'showLogin') return openAuthSheet('login');
+    if (a.dataset.act === 'showRegister') return openAuthSheet('register');
+    if (a.dataset.act === 'showAuth') return openAuthSheet(S.auth || 'login');
     if (a.dataset.act === 'forgotPassword') return doForgotPassword();
     if (a.dataset.act === 'resendVerification') return doResendVerification();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && S.auth) closeOverlay();
   });
 
   const verifyToken = new URLSearchParams(location.search).get('token');
   if (location.pathname.endsWith('/verify-email.html') && verifyToken) {
     postJson('/api/auth/verify-email', { token: verifyToken })
-      .then(() => renderAuth('Email verified. Please log in.', 'login'))
-      .catch((e) => renderAuth(e.message || 'Verification failed.', 'login'));
+      .then(() => { loadSnapshot(); openAuthSheet('login', 'Email verified. You can log in now.'); })
+      .catch((e) => { loadSnapshot(); openAuthSheet('login', e.message || 'Verification failed.'); });
   }
   if (location.pathname.endsWith('/reset-password.html') && verifyToken) {
     const next = window.prompt('Enter your new password (8+ characters):');
     if (next && next.length >= 8) {
       postJson('/api/auth/reset-password', { token: verifyToken, newPassword: next })
-        .then(() => renderAuth('Password updated. Please log in.', 'login'))
-        .catch((e) => renderAuth(e.message || 'Reset failed.', 'login'));
+        .then(() => { loadSnapshot(); openAuthSheet('login', 'Password updated. You can log in with the new one.'); })
+        .catch((e) => { loadSnapshot(); openAuthSheet('login', e.message || 'Reset failed.'); });
     } else {
-      renderAuth('Please enter a password with at least 8 characters.', 'login');
+      loadSnapshot();
+      openAuthSheet('login', 'Please enter a password with at least 8 characters.');
     }
   }
 
@@ -568,11 +635,16 @@
     const ok = await hydrateSession();
     if (!ok) {
       clearClientSession();
-      renderAuth('', 'login');
+      await loadSnapshot(); // the home page must open for visitors without a session
+      if (hashCode()) {
+        const code = hashCode();
+        openAuthSheet('login', `Log in to join table ${code}.`);
+      }
       return;
     }
     if (!S.emailVerified) {
-      renderAuth('Please verify your email before entering the lobby.');
+      await loadSnapshot();
+      openAuthSheet('login', 'Please verify your email to enter the lobby.');
       return;
     }
     connect();
@@ -765,10 +837,9 @@
     // keep the cursor in the name box when the screen is redrawn (e.g. someone joins while you type)
     const ae = document.activeElement;
     const keep = ae && ae.id === 'name' ? { start: ae.selectionStart, end: ae.selectionEnd } : null;
-    if (!S.ready && !S.room) {
+    if (!S.ready && !S.guest && !S.room) {
       $app.innerHTML = '<div class="page"><div class="brand"><div class="mark">🂡</div><h1>Tableverse</h1><p>Connecting…</p></div></div>';
-    } else if (!S.room && S.invite) renderInvite();
-    else if (!S.room) renderHome();
+    } else if (!S.room) renderHome();
     else if (S.room.status === 'lobby') renderLobby();
     else renderGame();
     updateWatchers();
@@ -780,28 +851,6 @@
         try { el.setSelectionRange(keep.start, keep.end); } catch { /* ignore */ }
       }
     }
-  }
-
-  function renderInvite() {
-    const t = tableByCode(S.invite);
-    const context = t
-      ? (t.status === 'playing' ? 'This game is already in progress.' : 'This table is waiting in the lobby.')
-      : 'Pick how you want to enter this table.';
-    $app.innerHTML = `
-    <main class="page">
-      <header class="brand"><span class="brand-snd">${CardTable.sound.button()}</span>
-        <div class="mark">🂡</div>
-        <h1>You’re invited!</h1>
-        <p>Join table <b class="code-inline">${esc(S.invite)}</b> on Tableverse. Pick a name and an avatar so your friends know who you are.</p>
-      </header>
-      <section class="panel">${profileHTML()}</section>
-      <section class="panel"><p class="hint" style="text-align:left">${esc(context)}</p>
-        <div class="row" style="margin-top:10px; gap:10px; flex-wrap:wrap">
-          <button class="btn big" data-act="joinInvite">Choose join mode</button>
-        </div>
-      </section>
-      <button class="btn ghost" data-act="cancelInvite">Not now</button>
-    </main>`;
   }
 
   function renderHome() {
@@ -860,6 +909,25 @@
         <button class="wn-close" data-act="dismissWhatsNew" aria-label="Dismiss">✕</button>
       </div>`}
       <div class="home-grid">
+        ${S.guest ? `
+        <section class="panel profile-panel">
+          <div class="panel-tag">PLAYER ACCOUNT</div>
+          <div class="profile">
+            <div class="profile-header">
+              <div class="profile-preview">
+                <span class="avatar big" style="background:hsl(260 55% 42%)">${esc(S.avatar || '★')}</span>
+                <div class="profile-meta">
+                  <span class="profile-welcome">${S.name ? `Welcome back, <b>${esc(S.name)}</b>` : 'Browse freely — log in to play'}</span>
+                  <span class="profile-hint">An account keeps your name, avatar and stats</span>
+                </div>
+              </div>
+            </div>
+            <div class="row" style="margin-top:12px;gap:8px;flex-wrap:wrap">
+              <button type="button" class="btn" data-act="showAuth">Log in</button>
+              <button type="button" class="btn ghost" data-act="showRegister">Create account</button>
+            </div>
+          </div>
+        </section>` : `
         <section class="panel profile-panel">
           <div class="panel-tag">PLAYER IDENTITY</div>
           ${profileHTML()}
@@ -868,7 +936,7 @@
             <button type="button" class="btn ghost small" data-act="logout">Log out</button>
             <button type="button" class="btn ghost small" data-act="logoutAll">Log out all</button>
           </div>
-        </section>
+        </section>`}
         <section class="panel join-panel">
           <div class="panel-tag">QUICK ACCESS</div>
           <label class="label" for="code">Have a table code? Jump in</label>
@@ -1083,21 +1151,12 @@
       render();
     },
     toggleAvatars: () => { S.avatarOpen = !S.avatarOpen; render(); },
-    stats: () => openStats(),
+    stats: () => (authed() ? openStats() : gateLogin(() => openStats())),
     emotes: () => toggleEmoteBar(),
     activityLog: () => openActivityLog(),
     sound: () => { CardTable.sound.toggle(); render(); },
-    joinInvite: () => {
-      if (!S.named || !S.name) return toast('Please type your name first');
-      store.set('ct_name', S.name);
-      openJoinModeDialog(S.invite, tableByCode(S.invite));
-    },
-    cancelInvite: () => {
-      S.invite = '';
-      setHash('');
-      render();
-    },
     create: (el) => {
+      if (!authed()) return gateLogin(() => actions.create(el));
       const game = el.dataset.game;
       send({ t: 'create', gameId: game, visibility: 'private', name: S.name || undefined, avatar: S.avatar || undefined });
     },
@@ -1106,7 +1165,7 @@
       send({ t: 'setVisibility', visibility: cur === 'public' ? 'private' : 'public' });
     },
     // The server decides: your old seat if you had one (a bot is playing it), otherwise a seat in a lobby, otherwise watching.
-    rejoin: (el) => joinTable(el.dataset.code, 'join'),
+    rejoin: (el) => askJoinMode(el.dataset.code, tableByCode(el.dataset.code)),
     joinPublic: (el) => askJoinMode(el.dataset.code, tableByCode(el.dataset.code)),
     toggleSessions: () => { S.sessionListOpen = !S.sessionListOpen; store.set('ct_sessions_open', S.sessionListOpen ? '1' : '0'); render(); },
     leave: () => send({ t: 'leave' }),
@@ -1176,8 +1235,9 @@
   $app.addEventListener('submit', (e) => {
     if (e.target.id === 'joinForm') {
       e.preventDefault();
-      if (S.draftCode.length === 6) send({ t: 'join', code: S.draftCode, name: S.name || undefined, avatar: S.avatar || undefined });
-      else toast('Enter the 6-letter table code');
+      if (S.draftCode.length !== 6) return toast('Enter the 6-letter table code');
+      const code = S.draftCode;
+      gateLogin(() => askJoinMode(code, tableByCode(code)));
     }
   });
 
