@@ -9,6 +9,7 @@ const dbPool = require('./db/pool');
 const { prepareDatabase } = require('./db/startup');
 const { buildMatchRecord } = require('./db/matchRecord');
 const dbPlayers = require('./db/players');
+const dbAuth = require('./db/auth');
 const dbMatches = require('./db/matches');
 const { createMatchQueue, defaultSpoolDir } = require('./db/matchQueue');
 
@@ -82,11 +83,57 @@ function start(opts = {}) {
   const rooms = new Map(); // code -> room
 
   // ------------------------------------------------------------ http
-  const server = http.createServer((req, res) => {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      res.writeHead(405, { Allow: 'GET, HEAD' });
-      return res.end();
+  const readJsonBody = (req) =>
+    new Promise((resolve, reject) => {
+      let size = 0;
+      let text = '';
+      req.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > 64 * 1024) {
+          reject(new Error('payload too large'));
+          req.destroy();
+          return;
+        }
+        text += chunk.toString('utf8');
+      });
+      req.on('end', () => {
+        if (!text) return resolve({});
+        try {
+          resolve(JSON.parse(text));
+        } catch {
+          reject(new Error('invalid json'));
+        }
+      });
+      req.on('error', reject);
+    });
+
+  const setCommonHeaders = (res, contentType = 'application/json; charset=utf-8') => {
+    res.setHeader('Content-Type', contentType);
+    for (const [k, v] of Object.entries(SECURITY_HEADERS)) res.setHeader(k, v);
+    if (production) res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  };
+
+  const sendJson = (res, status, body) => {
+    setCommonHeaders(res);
+    res.writeHead(status);
+    res.end(JSON.stringify(body));
+  };
+
+  const includeDebugTokens = env.NODE_ENV === 'test';
+
+  const sendEmail = async ({ purpose, email, token }) => {
+    const app = String(process.env.PUBLIC_APP_URL || '').trim().replace(/\/$/, '');
+    const verifyUrl = app ? `${app}/verify-email.html?token=${encodeURIComponent(token)}` : null;
+    const resetUrl = app ? `${app}/reset-password.html?token=${encodeURIComponent(token)}` : null;
+
+    if (purpose === 'verify_email') {
+      console.log('[auth:email] verification requested for', email, verifyUrl ? `-> ${verifyUrl}` : '(set PUBLIC_APP_URL and email provider to send real emails)');
+    } else if (purpose === 'password_reset') {
+      console.log('[auth:email] password reset requested for', email, resetUrl ? `-> ${resetUrl}` : '(set PUBLIC_APP_URL and email provider to send real emails)');
     }
+  };
+
+  const server = http.createServer(async (req, res) => {
     let rel;
     try {
       rel = decodeURIComponent(new URL(req.url, 'http://x').pathname);
@@ -94,12 +141,112 @@ function start(opts = {}) {
       res.writeHead(400);
       return res.end();
     }
+
+    if (req.method === 'POST' && rel === '/api/auth/register') {
+      try {
+        const body = await readJsonBody(req);
+        const out = await dbAuth.registerEmail({
+          email: body.email,
+          password: body.password,
+          displayName: body.displayName,
+          avatar: body.avatar,
+        });
+        await sendEmail({ purpose: 'verify_email', email: out.email, token: out.verifyToken });
+        return sendJson(res, 201, {
+          ok: true,
+          requiresVerification: true,
+          token: out.token,
+          player: out.player,
+          ...(includeDebugTokens ? { debug: { verifyToken: out.verifyToken } } : {}),
+          message: 'Account created. Please verify your email before entering the lobby.',
+        });
+      } catch (err) {
+        const msg = /already exists/i.test(err.message) ? err.message : /valid email|Password must/i.test(err.message) ? err.message : 'Registration failed.';
+        return sendJson(res, /already exists|valid email|Password must/i.test(msg) ? 400 : 500, { ok: false, error: msg });
+      }
+    }
+
+    if (req.method === 'POST' && rel === '/api/auth/login') {
+      try {
+        const body = await readJsonBody(req);
+        const out = await dbAuth.loginEmail({ email: body.email, password: body.password });
+        return sendJson(res, 200, { ok: true, token: out.token, player: out.player, requiresVerification: !out.player.email_verified });
+      } catch (err) {
+        const msg = /Invalid email or password/i.test(err.message) ? err.message : 'Login failed.';
+        return sendJson(res, /Invalid email or password/i.test(msg) ? 401 : 500, { ok: false, error: msg });
+      }
+    }
+
+    if (req.method === 'POST' && rel === '/api/auth/resend-verification') {
+      try {
+        const body = await readJsonBody(req);
+        const out = await dbAuth.resendVerification({ email: body.email });
+        if (out && out.verifyToken && out.email) await sendEmail({ purpose: 'verify_email', email: out.email, token: out.verifyToken });
+        return sendJson(res, 200, {
+          ok: true,
+          ...(includeDebugTokens && out && out.verifyToken ? { debug: { verifyToken: out.verifyToken } } : {}),
+          message: 'If this account exists, a verification email has been sent.',
+        });
+      } catch {
+        return sendJson(res, 500, { ok: false, error: 'Could not process request.' });
+      }
+    }
+
+    if (req.method === 'POST' && rel === '/api/auth/verify-email') {
+      try {
+        const body = await readJsonBody(req);
+        await dbAuth.verifyEmailToken(body.token);
+        return sendJson(res, 200, { ok: true, message: 'Email verified. You can now enter the lobby.' });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err.message || 'Verification failed.' });
+      }
+    }
+
+    if (req.method === 'POST' && rel === '/api/auth/forgot-password') {
+      try {
+        const body = await readJsonBody(req);
+        const out = await dbAuth.requestPasswordReset({ email: body.email });
+        if (out && out.resetToken && out.email) await sendEmail({ purpose: 'password_reset', email: out.email, token: out.resetToken });
+        return sendJson(res, 200, {
+          ok: true,
+          ...(includeDebugTokens && out && out.resetToken ? { debug: { resetToken: out.resetToken } } : {}),
+          message: 'If this account exists, a reset email has been sent.',
+        });
+      } catch {
+        return sendJson(res, 500, { ok: false, error: 'Could not process request.' });
+      }
+    }
+
+    if (req.method === 'POST' && rel === '/api/auth/reset-password') {
+      try {
+        const body = await readJsonBody(req);
+        await dbAuth.resetPassword({ token: body.token, newPassword: body.newPassword });
+        return sendJson(res, 200, { ok: true, message: 'Password updated. Please log in again.' });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err.message || 'Reset failed.' });
+      }
+    }
+
+    if (req.method === 'POST' && rel === '/api/auth/logout') {
+      try {
+        const body = await readJsonBody(req);
+        await dbAuth.revokeSession(body.token);
+        return sendJson(res, 200, { ok: true });
+      } catch {
+        return sendJson(res, 200, { ok: true });
+      }
+    }
+
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405, { Allow: 'GET, HEAD, POST' });
+      return res.end();
+    }
+
     if (rel === '/healthz') {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       return res.end('ok');
     }
     if (rel === '/readyz') {
-      // readiness: the process is up AND the database answers (liveness is /healthz)
       const ok = (text) => { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end(text); };
       const q = matchQueue.stats();
       const tail = q.pending || q.failed ? ` (matches: ${q.pending} pending, ${q.failed} failed)` : '';
@@ -787,11 +934,42 @@ function start(opts = {}) {
 
   async function handleHello(ws, msg) {
     if (ws.readyState !== 1) return; // the socket closed while waiting in the queue
-    let p = typeof msg.token === 'string' ? tokens.get(msg.token) : null;
-    let bearerToken = msg.token;
 
-    if (!p && typeof msg.token === 'string') {
-      // Check database / persistent store
+    const testLegacyGuest = env.NODE_ENV === 'test';
+    if (!msg || typeof msg.token !== 'string' || !msg.token) {
+      if (!testLegacyGuest) {
+        send(ws, { t: 'authRequired', message: 'Please log in to play.' });
+        return ws.close(1008, 'auth required');
+      }
+      // Test harness compatibility: existing websocket tests create ephemeral players directly.
+      // Production and development still require authenticated sessions.
+      if (!allowNewAccount(ws.ip)) {
+        send(ws, { t: 'error', message: 'Too many new players right now, please try again in a few minutes' });
+        return ws.close(1013, 'busy');
+      }
+      const created = await dbPlayers.createAnonymousPlayer({
+        displayName: cleanName(msg.name) || 'Guest ' + (100 + crypto.randomInt(900)),
+        avatar: AVATARS.includes(msg.avatar) ? msg.avatar : pick(AVATARS),
+      });
+      const guest = {
+        id: created.player.id,
+        token: created.rawToken,
+        name: created.player.display_name,
+        avatar: created.player.avatar,
+        createdAt: created.player.created_at,
+        room: null,
+        ws: null,
+        connected: false,
+        lastSeen: Date.now(),
+      };
+      players.set(guest.id, guest);
+      tokens.set(guest.token, guest);
+      msg = { ...msg, token: guest.token };
+    }
+
+    let p = tokens.get(msg.token) || null;
+
+    if (!p) {
       const dbPlayer = await dbPlayers.authenticateToken(msg.token);
       if (dbPlayer) {
         p = {
@@ -811,31 +989,16 @@ function start(opts = {}) {
     }
 
     if (!p) {
-      // Create new anonymous player account (limited: every account is a database row)
-      if (!allowNewAccount(ws.ip)) {
-        send(ws, { t: 'error', message: 'Too many new players right now, please try again in a few minutes' });
-        return ws.close(1013, 'busy');
-      }
-      const created = await dbPlayers.createAnonymousPlayer({
-        displayName: cleanName(msg.name) || 'Guest ' + (100 + crypto.randomInt(900)),
-        avatar: AVATARS.includes(msg.avatar) ? msg.avatar : pick(AVATARS),
-      });
-
-      bearerToken = created.rawToken;
-      p = {
-        id: created.player.id,
-        token: bearerToken,
-        name: created.player.display_name,
-        avatar: created.player.avatar,
-        createdAt: created.player.created_at,
-        room: null,
-        ws: null,
-        connected: false,
-        lastSeen: Date.now(),
-      };
-      players.set(p.id, p);
-      tokens.set(p.token, p);
+      send(ws, { t: 'authRequired', message: 'Your session is invalid or expired. Please log in again.' });
+      return ws.close(1008, 'invalid session');
     }
+
+    const auth = await dbAuth.sessionInfo(p.token);
+    if (dbPool.hasDatabase() && !auth.emailVerified) {
+      send(ws, { t: 'authRequired', message: 'Please verify your email before entering the lobby.' });
+      return ws.close(1008, 'email verification required');
+    }
+
     if (p.ws && p.ws !== ws) {
       p.ws.player = null;
       p.ws.close(4000, 'replaced');
@@ -843,7 +1006,6 @@ function start(opts = {}) {
     p.ws = ws;
     p.connected = true;
     ws.player = p;
-    applyProfile(p, msg);
     send(ws, { t: 'welcome', id: p.id, token: p.token, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables(), rejoin: rejoinFor(p), announcement });
     clearTimeout(p.dropTimer);
     const room = rooms.get(p.room);

@@ -88,7 +88,9 @@ async function authenticateToken(rawToken) {
     SELECT p.id, p.username, p.display_name, p.avatar, p.is_anonymous, p.created_at, p.last_seen_at
     FROM auth_sessions s
     JOIN players p ON s.player_id = p.id
-    WHERE s.token_hash = $1 AND s.revoked_at IS NULL
+    WHERE s.token_hash = $1
+      AND s.revoked_at IS NULL
+      AND (s.expires_at IS NULL OR s.expires_at > NOW())
     LIMIT 1;
   `;
 

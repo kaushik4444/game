@@ -14,7 +14,8 @@
 
   const S = {
     id: null,
-    token: store.get('ct_token'),
+    token: store.get('ct_token'), // issued by /api/auth/login or /api/auth/register
+    emailVerified: store.get('ct_email_verified') === '1',
     name: store.get('ct_name') || '',
     games: [],
     room: null,
@@ -91,15 +92,108 @@
   }
   window.CardTable.showRules = showRules;
 
-  // ------------------------------------------------------------ connection
+  // ------------------------------------------------------------ auth + connection
   const send = (msg) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); };
 
+  async function postJson(url, body) {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    });
+    let data = {};
+    try { data = await r.json(); } catch { /* ignore */ }
+    if (!r.ok || data.ok === false) throw new Error(data.error || `Request failed (${r.status})`);
+    return data;
+  }
+
+  function authPageHTML(tab = 'login', msg = '') {
+    const loginOn = tab === 'login';
+    return `<main class="page" style="max-width:560px">
+      <header class="brand"><span class="brand-snd">${CardTable.sound.button()}</span><div class="mark">🂡</div><h1>Tableverse</h1><p>Sign in to play. Guest mode is disabled.</p></header>
+      ${msg ? `<section class="panel"><p class="hint" style="color:#f7d37b">${esc(msg)}</p></section>` : ''}
+      <section class="panel">
+        <div class="row" style="gap:8px;margin-bottom:10px"><button class="btn ${loginOn ? '' : 'ghost'}" data-act="showLogin">Log in</button><button class="btn ${loginOn ? 'ghost' : ''}" data-act="showRegister">Create account</button></div>
+        ${loginOn ? `
+          <form id="loginForm" class="join-form">
+            <input id="loginEmail" type="email" required placeholder="Email">
+            <input id="loginPassword" type="password" required minlength="8" placeholder="Password">
+            <button class="btn big-join" type="submit">Log in</button>
+          </form>
+          <div class="row" style="margin-top:10px"><button class="btn ghost small" data-act="forgotPassword">Forgot password?</button></div>
+        ` : `
+          <form id="registerForm" class="join-form">
+            <input id="registerName" type="text" maxlength="20" required placeholder="Display name">
+            <input id="registerEmail" type="email" required placeholder="Email">
+            <input id="registerPassword" type="password" required minlength="8" placeholder="Password (8+ chars)">
+            <button class="btn big-join" type="submit">Create account</button>
+          </form>
+        `}
+      </section>
+      <section class="panel"><small class="hint">Google sign-in and account linking will be added in Stage 2.</small></section>
+    </main>`;
+  }
+
+  async function doLogin(email, password) {
+    const out = await postJson('/api/auth/login', { email, password });
+    S.token = out.token;
+    S.name = out.player && out.player.display_name ? out.player.display_name : S.name;
+    S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
+    S.named = !!S.name;
+    S.emailVerified = !!(out.player && out.player.email_verified);
+    store.set('ct_token', S.token);
+    store.set('ct_email_verified', S.emailVerified ? '1' : '0');
+    if (S.name) store.set('ct_name', S.name);
+    if (S.avatar) store.set('ct_avatar', S.avatar);
+    if (!S.emailVerified) {
+      renderAuth('Please verify your email before entering the lobby.');
+      return;
+    }
+    connect();
+  }
+
+  async function doRegister(name, email, password) {
+    const out = await postJson('/api/auth/register', { displayName: name, email, password, avatar: S.avatar || undefined });
+    S.token = out.token;
+    S.name = out.player && out.player.display_name ? out.player.display_name : name;
+    S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
+    S.named = !!S.name;
+    S.emailVerified = !!(out.player && out.player.email_verified);
+    store.set('ct_token', S.token);
+    store.set('ct_email_verified', S.emailVerified ? '1' : '0');
+    if (S.name) store.set('ct_name', S.name);
+    if (S.avatar) store.set('ct_avatar', S.avatar);
+    renderAuth('Account created. Check your email for a verification link.');
+  }
+
+  async function doForgotPassword() {
+    const email = window.prompt('Enter your account email:');
+    if (!email) return;
+    try {
+      await postJson('/api/auth/forgot-password', { email });
+      toast('If this account exists, a reset link has been sent.');
+    } catch (e) {
+      toast(e.message || 'Could not send reset link');
+    }
+  }
+
+  function renderAuth(msg = '', tab = 'login') {
+    S.ready = false;
+    S.room = null;
+    S.view = null;
+    $app.innerHTML = authPageHTML(tab, msg);
+  }
+
   function connect() {
+    if (!S.token) {
+      renderAuth('', 'login');
+      return;
+    }
     ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
     ws.onopen = () => {
       retry = 0;
       $banner.hidden = true;
-      send({ t: 'hello', token: S.token || undefined, name: S.name || undefined, avatar: S.avatar || undefined });
+      send({ t: 'hello', token: S.token || undefined });
     };
     ws.onmessage = (e) => {
       let m;
@@ -231,14 +325,18 @@
         S.ready = true;
         const code = hashCode();
         if (code && !S.room) {
-          if (S.named) {
-            const t = tableByCode(code);
-            askJoinMode(code, t);
-          } else S.invite = code; // first visit via an invite link: ask for a name before joining
+          const t = tableByCode(code);
+          askJoinMode(code, t);
         }
         render();
         break;
       }
+      case 'authRequired':
+        store.set('ct_token', '');
+        S.token = '';
+        S.ready = false;
+        renderAuth(m.message || 'Please log in to continue.');
+        break;
       case 'stats':
         drawStats(m.stats);
         break;
@@ -301,6 +399,58 @@
   }
 
   document.addEventListener('visibilitychange', () => { if (!document.hidden) document.title = 'Tableverse'; });
+
+  document.addEventListener('submit', async (e) => {
+    if (e.target.id === 'loginForm') {
+      e.preventDefault();
+      const email = (document.getElementById('loginEmail') || {}).value;
+      const password = (document.getElementById('loginPassword') || {}).value;
+      try {
+        await doLogin(email, password);
+      } catch (err) {
+        renderAuth(err.message || 'Login failed', 'login');
+      }
+    }
+    if (e.target.id === 'registerForm') {
+      e.preventDefault();
+      const name = (document.getElementById('registerName') || {}).value;
+      const email = (document.getElementById('registerEmail') || {}).value;
+      const password = (document.getElementById('registerPassword') || {}).value;
+      try {
+        await doRegister(name, email, password);
+      } catch (err) {
+        renderAuth(err.message || 'Registration failed', 'register');
+      }
+    }
+  });
+
+  document.addEventListener('click', async (e) => {
+    const a = e.target.closest('[data-act]');
+    if (!a) return;
+    if (a.dataset.act === 'showLogin') return renderAuth('', 'login');
+    if (a.dataset.act === 'showRegister') return renderAuth('', 'register');
+    if (a.dataset.act === 'forgotPassword') return doForgotPassword();
+  });
+
+  const verifyToken = new URLSearchParams(location.search).get('token');
+  if (location.pathname.endsWith('/verify-email.html') && verifyToken) {
+    postJson('/api/auth/verify-email', { token: verifyToken })
+      .then(() => renderAuth('Email verified. Please log in.', 'login'))
+      .catch((e) => renderAuth(e.message || 'Verification failed.', 'login'));
+  }
+  if (location.pathname.endsWith('/reset-password.html') && verifyToken) {
+    const next = window.prompt('Enter your new password (8+ characters):');
+    if (next && next.length >= 8) {
+      postJson('/api/auth/reset-password', { token: verifyToken, newPassword: next })
+        .then(() => renderAuth('Password updated. Please log in.', 'login'))
+        .catch((e) => renderAuth(e.message || 'Reset failed.', 'login'));
+    } else {
+      renderAuth('Please enter a password with at least 8 characters.', 'login');
+    }
+  }
+
+  if (!S.token) renderAuth('', 'login');
+  else connect();
 
   // ------------------------------------------------------------ rendering
   const avatarColor = (s) => {
@@ -897,5 +1047,4 @@
     }
   });
 
-  connect();
 })();
