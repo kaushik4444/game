@@ -51,7 +51,7 @@ test('an unclassified table is refused by name instead of being ignored', () => 
   const f = healthy(); f.tables.push('user_notes');
   refused(() => c.checkSchema(f), /unclassified table\(s\) user_notes/);
 });
-test('a missing table, another schema, a trigger, a new foreign key are all refused', () => {
+test('a missing table, another schema, a trigger, a new foreign key, a view, a sequence or function are all refused', () => {
   let f = healthy(); f.tables = f.tables.filter((t) => t !== 'matches');
   refused(() => c.checkSchema(f), /missing: matches/);
   f = healthy(); f.foreignSchemas = ['audit'];
@@ -62,6 +62,12 @@ test('a missing table, another schema, a trigger, a new foreign key are all refu
   refused(() => c.checkSchema(f), /unexpected foreign key\(s\): matches>players/);
   f = healthy(); f.fks = f.fks.filter((k) => k.child !== 'auth_sessions');
   refused(() => c.checkSchema(f), /foreign key\(s\) missing: auth_sessions>players/);
+  f = healthy(); f.views = ['user_view'];
+  refused(() => c.checkSchema(f), /unexpected view\(s\): user_view/);
+  f = healthy(); f.sequences = ['custom_seq'];
+  refused(() => c.checkSchema(f), /unexpected sequence\(s\): custom_seq/);
+  f = healthy(); f.functions = ['custom_func'];
+  refused(() => c.checkSchema(f), /unexpected function\(s\): custom_func/);
 });
 test('a preserved table that references a table to be emptied is refused', () => {
   const f = healthy(); f.fks.push({ name: 'bad', child: 'schema_migrations', parent: 'players', onDelete: 'CASCADE' });

@@ -76,6 +76,7 @@ function parseTarget(url) {
     user: decodeURIComponent(u.username || ''),
     isLocal: socket || LOCAL_HOSTS.has(u.hostname.toLowerCase()),
     hasSslMode: /[?&]sslmode=/.test(url),
+    sslMode: new URLSearchParams(u.search).get('sslmode'),
   };
 }
 
@@ -101,8 +102,14 @@ async function discover(client) {
   const q = async (sql) => (await client.query(sql)).rows;
   const tables = (await q(`SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
                            WHERE n.nspname = 'public' AND c.relkind IN ('r','p') ORDER BY 1`)).map((r) => r.relname);
+  const views = (await q(`SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                          WHERE n.nspname = 'public' AND c.relkind IN ('v','m') ORDER BY 1`)).map((r) => r.relname);
+  const sequences = (await q(`SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                              WHERE n.nspname = 'public' AND c.relkind = 'S' ORDER BY 1`)).map((r) => r.relname);
+  const functions = (await q(`SELECT p.proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                              WHERE n.nspname = 'public' ORDER BY 1`)).map((r) => r.proname);
   const foreignSchemas = (await q(`SELECT DISTINCT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-                                   WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ('public','information_schema') AND n.nspname NOT LIKE 'pg\\_%'`)).map((r) => r.nspname);
+                                   WHERE c.relkind IN ('r','p','v','m','S') AND n.nspname NOT IN ('public','information_schema') AND n.nspname NOT LIKE 'pg\\_%'`)).map((r) => r.nspname);
   const fks = (await q(`SELECT con.conname, child.relname AS child, parent.relname AS parent, con.confdeltype AS on_delete
                         FROM pg_constraint con
                         JOIN pg_class child ON child.oid = con.conrelid JOIN pg_class parent ON parent.oid = con.confrelid
@@ -112,7 +119,7 @@ async function discover(client) {
   const triggers = (await q(`SELECT c.relname AS tbl, t.tgname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
                              JOIN pg_namespace n ON n.oid = c.relnamespace WHERE NOT t.tgisinternal AND n.nspname = 'public' ORDER BY 1, 2`));
   const applied = tables.includes('schema_migrations') ? (await client.query('SELECT version FROM schema_migrations ORDER BY version')).rows.map((r) => r.version) : [];
-  return { tables, foreignSchemas, fks, triggers, applied };
+  return { tables, views, sequences, functions, foreignSchemas, fks, triggers, applied };
 }
 
 /** Fingerprint of everything that must not change: structure and migration history. Contains no user data. */
@@ -165,7 +172,14 @@ function checkSchema(found, { migrationFiles = repoMigrations(), order = CLEAN_T
   for (const fk of found.fks) {
     if (PRESERVE.some((p) => p.table === fk.child) && CLEAN_TABLES.includes(fk.parent)) problems.push(`the preserved table "${fk.child}" references "${fk.parent}", which would be emptied`);
   }
-  if (found.triggers.length) problems.push(`trigger(s) on ${found.triggers.map((t) => t.tbl + '.' + t.tgname).join(', ')}: a trigger could change other data during the deletes`);
+  if (found.views && found.views.length) problems.push(`unexpected view(s): ${found.views.join(', ')}`);
+  if (found.sequences && found.sequences.length) problems.push(`unexpected sequence(s): ${found.sequences.join(', ')}`);
+  if (found.functions && found.functions.length) {
+    const customFns = found.functions.filter((fn) => !['gen_random_uuid', 'uuid_generate_v4'].includes(fn));
+    if (customFns.length) problems.push(`unexpected function(s): ${customFns.join(', ')}`);
+  }
+  if (found.triggers && found.triggers.length) problems.push(`trigger(s) on ${found.triggers.map((t) => t.tbl + '.' + t.tgname).join(', ')}: a trigger could change other data during the deletes`);
+
 
   const appliedSet = new Set(found.applied); const repoSet = new Set(migrationFiles);
   const notApplied = migrationFiles.filter((m) => !appliedSet.has(m)); const notInRepo = found.applied.filter((m) => !repoSet.has(m));
@@ -221,12 +235,15 @@ async function breakdowns(client) {
 
 // ------------------------------------------------------------------------------------------------ connection
 async function connect(url, target, pg = require('pg')) {
+  if (!target.isLocal && target.sslMode !== 'verify-full' && target.sslMode !== 'verify-ca' && target.sslMode !== 'require') {
+     throw new RefusedError('remote database connection MUST use sslmode=verify-full, verify-ca or require');
+  }
   const client = new pg.Client({
     connectionString: url,
     application_name: 'tableverse-cleanup',
     connectionTimeoutMillis: 10000,
-    // a remote database is never reached in plaintext, even if the URL forgot ?sslmode=require
-    ...(!target.isLocal && !target.hasSslMode ? { ssl: { rejectUnauthorized: true } } : {}),
+    // a remote database is never reached in plaintext
+    ...(target.isLocal ? {} : { ssl: { rejectUnauthorized: true } }),
   });
   client.on('error', () => {}); // a dropped idle connection must not crash the script; the pending query reports it
   await client.connect();
