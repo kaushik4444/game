@@ -1,7 +1,7 @@
 {
   "name": "tableverse",
   "version": "0.4.0",
-  "description": "Tableverse \u2014 Your friends. Your games. One table.",
+  "description": "Tableverse — Your friends. Your games. One table.",
   "main": "server.js",
   "scripts": {
     "build": "node --check server.js && node --check public/app.js && node --check db/pool.js && node --check db/players.js && node --check db/matches.js && node --check db/migrate.js && node --check db/startup.js && node --check db/matchRecord.js && node --check db/matchQueue.js && node --check db/stats.js",
@@ -11,6 +11,7 @@
     "test:pg": "node tests/db.pg.test.js --require && node tests/production.pg.test.js --require"
   },
   "dependencies": {
+    "@node-rs/argon2": "^2.2.2",
     "pg": "^8.13.1",
     "ws": "^8.18.0"
   },
