@@ -19,7 +19,8 @@
     id: null,
     token: '', // short-lived websocket auth credential (never persisted)
     csrf: '', // fetched from the server (cookie-backed), never stored
-    emailVerified: store.get('ct_email_verified') === '1',
+    emailVerified: false,
+    email: '',
     name: store.get('ct_name') || '',
     username: store.get('ct_username') || '',
     games: [],
@@ -145,11 +146,11 @@
       S.username = out.player && out.player.username ? out.player.username : S.username;
       S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
       S.emailVerified = !!out.emailVerified;
+      S.email = out.player && out.player.email ? out.player.email : '';
       S.named = !!S.name;
       if (S.name) store.set('ct_name', S.name);
       if (S.username) store.set('ct_username', S.username);
       if (S.avatar) store.set('ct_avatar', S.avatar);
-      store.set('ct_email_verified', S.emailVerified ? '1' : '0');
       return true;
     } catch {
       return false;
@@ -160,9 +161,9 @@
     S.token = '';
     S.csrf = '';
     S.emailVerified = false;
+    S.email = '';
     S.id = null;
     store.set('ct_csrf', ''); // older versions kept it in localStorage
-    store.set('ct_email_verified', '0');
   }
 
   async function doLogoutAll() {
@@ -199,10 +200,6 @@
     if (Object.prototype.hasOwnProperty.call(out || {}, 'emailVerificationRequired')) return !!out.emailVerificationRequired;
     if (Object.prototype.hasOwnProperty.call(out || {}, 'requiresVerification')) return !!out.requiresVerification;
     return true;
-  }
-
-  function requiresVerificationFromResponse(out) {
-    return Object.prototype.hasOwnProperty.call(out || {}, 'requiresVerification') ? !!out.requiresVerification : true;
   }
 
   function authPolicyHintHTML() {
@@ -281,20 +278,21 @@
     S.name = out.player && out.player.display_name ? out.player.display_name : S.name;
     S.username = out.player && out.player.username ? out.player.username : S.username;
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
+    S.email = out.player && out.player.email ? out.player.email : '';
     S.named = !!S.name;
     S.requireEmailVerification = policyRequiresVerification(out);
-    S.emailVerified = !requiresVerificationFromResponse(out);
+    S.emailVerified = !!(out.player && out.player.email_verified);
     S.signedOutIntentionally = false;
-    store.set('ct_email_verified', S.emailVerified ? '1' : '0');
     if (S.name) store.set('ct_name', S.name);
     if (S.username) store.set('ct_username', S.username);
     if (S.avatar) store.set('ct_avatar', S.avatar);
-    if (!S.emailVerified) {
+    if (S.requireEmailVerification && !S.emailVerified) {
       openAuthSheet('login', 'Please verify your email before playing. Use “Resend verification email” if the link did not arrive.');
       return;
     }
     closeOverlay();
     connect();
+    if (!S.emailVerified) toast('Email verification pending. Friend-testing mode lets you play while unverified.');
   }
 
   async function doRegister(name, username, email, password) {
@@ -304,11 +302,11 @@
     S.name = out.player && out.player.display_name ? out.player.display_name : name;
     S.username = out.player && out.player.username ? out.player.username : String(username || '').toLowerCase();
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
+    S.email = out.player && out.player.email ? out.player.email : '';
     S.named = !!S.name;
     S.requireEmailVerification = policyRequiresVerification(out);
-    S.emailVerified = !requiresVerificationFromResponse(out);
+    S.emailVerified = !!(out.player && out.player.email_verified);
     S.signedOutIntentionally = false;
-    store.set('ct_email_verified', S.emailVerified ? '1' : '0');
     if (S.name) store.set('ct_name', S.name);
     if (S.username) store.set('ct_username', S.username);
     if (S.avatar) store.set('ct_avatar', S.avatar);
@@ -321,8 +319,8 @@
     closeOverlay();
     connect();
     toast(out.emailSent === false
-      ? 'Account created. You can play now; verification email delivery failed.'
-      : 'Account created. You can play now.');
+      ? 'Account created. Email verification is still pending, and delivery failed. Friend-testing mode lets you play now.'
+      : 'Account created. Email verification is still pending; friend-testing mode lets you play now.');
   }
 
   async function doResendVerification() {
@@ -692,14 +690,13 @@
       }
       return;
     }
-    if (!S.emailVerified) {
+    if (S.requireEmailVerification && !S.emailVerified) {
       await loadSnapshot();
-      openAuthSheet('login', S.requireEmailVerification
-        ? 'Please verify your email to enter the lobby.'
-        : 'Your account is ready. Friend-testing mode currently allows entry without email verification.');
+      openAuthSheet('login', 'Please verify your email to enter the lobby.');
       return;
     }
     connect();
+    if (!S.emailVerified) toast('Email verification pending. Friend-testing mode lets you play while unverified.');
   })();
 
   // ------------------------------------------------------------ rendering
@@ -985,16 +982,30 @@
   }
 
   function openSettingsDialog() {
+    const resendLabel = S.requireEmailVerification ? 'Resend verification email' : 'Resend verification email — Soon';
+    const verificationStatus = S.emailVerified
+      ? `<div class="setting-row verify-status"><div><b>Email verified</b><small>Your email address is verified.</small></div><span class="verify-pill verified">Verified</span></div>`
+      : `<div class="setting-row verify-status"><div><b>Email verification pending</b><small>Your email address has not been verified yet. ${S.requireEmailVerification ? 'Please verify your email before entering the lobby.' : 'You can play normally. Email verification is optional during friend testing.'}</small></div><span class="verify-pill ${S.requireEmailVerification ? 'required' : 'optional'}">${S.requireEmailVerification ? 'Pending' : 'Pending'}</span></div>
+         <div class="setting-row verify-status"><div><b>Verification email</b><small>${S.requireEmailVerification ? 'Use this to send another verification link to your account email.' : 'Email verification is optional during friend testing. Resending will be available soon.'}</small></div><button type="button" class="btn ghost small" data-modal-act="resendVerificationFromSettings" ${S.requireEmailVerification ? '' : 'disabled aria-disabled="true"'}>${resendLabel}</button></div>`;
     const body = () => `<div class="setting-row"><div><b>Sound effects</b><small>Card sounds, turn alerts and fanfares.</small></div><button type="button" class="btn ${CardTable.sound.isMuted() ? 'ghost' : ''} small" data-modal-act="toggleSound" aria-pressed="${!CardTable.sound.isMuted()}">${CardTable.sound.isMuted() ? 'Off' : 'On'}</button></div>
       <div class="setting-row"><div><b>Recent tables</b><small>${S.recentTables.length ? `${S.recentTables.length} remembered on this device.` : 'Nothing remembered on this device.'}</small></div><button type="button" class="btn ghost small" data-modal-act="clearRecent" ${S.recentTables.length ? '' : 'disabled'}>Clear</button></div>
       <div class="setting-row"><div><b>Announcements</b><small>Show the site banner again if you dismissed it.</small></div><button type="button" class="btn ghost small" data-modal-act="showAnnouncement" ${S.announcement && S.dismissedAnnouncement === S.announcement ? '' : 'disabled'}>Show</button></div>
-      <div class="setting-row"><div><b>Email verification</b><small>${S.requireEmailVerification ? 'Required before entering the lobby in this environment.' : 'Optional in this friend-testing environment. You can play immediately after sign-up.'}</small></div><span class="verify-pill ${S.requireEmailVerification ? 'required' : 'optional'}">${S.requireEmailVerification ? 'Required' : 'Optional'}</span></div>
+      ${verificationStatus}
       <div class="setting-row"><div><b>Account</b><small>${S.username ? `Signed in as @${esc(S.username)}.` : 'Signed in.'} Signing out everywhere ends every session on every device.</small></div><button type="button" class="btn ghost small" data-modal-act="logoutAllFromSettings">Log out everywhere</button></div>`;
     openModal('Settings', body(), (o) => {
       const redraw = () => { o.querySelector('.modal-body').innerHTML = body(); };
       modalActions.toggleSound = () => { CardTable.sound.toggle(); redraw(); };
       modalActions.clearRecent = () => { S.recentTables = []; store.set('ct_recent', '[]'); redraw(); render(); };
       modalActions.showAnnouncement = () => { S.dismissedAnnouncement = null; store.remove('ct_ann'); redraw(); render(); };
+      modalActions.resendVerificationFromSettings = async () => {
+        if (!S.requireEmailVerification || S.emailVerified || !S.email) return;
+        try {
+          await postJson('/api/auth/resend-verification', { email: S.email });
+          toast('If this account needs verifying, a new link has been sent.');
+        } catch (e) {
+          toast(e.message || 'Could not send the email');
+        }
+      };
       modalActions.logoutAllFromSettings = () => { closeModal(); doLogoutAll(); };
     });
   }

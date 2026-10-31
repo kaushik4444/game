@@ -278,6 +278,7 @@ function cookieSocket(port, cookie) {
         assert.equal(reg.status, 201, JSON.stringify(reg.json));
         assert.equal(reg.json.requiresVerification, false);
         assert.equal(reg.json.emailVerificationRequired, false, 'register response exposes policy mode, not just account state');
+        assert.equal(reg.json.player.email_verified, false, 'optional mode does not mark new accounts as verified');
         assert.equal(reg.json.emailSent, false);
         const row = (await q('SELECT email_verified_at FROM auth_identities WHERE provider = $1 AND provider_user_id = $2 LIMIT 1', ['email', email]))[0];
         assert.equal(row.email_verified_at, null, 'stored identity remains unverified');
@@ -285,18 +286,126 @@ function cookieSocket(port, cookie) {
         const login = await b.must('/api/auth/login', { email, password: PW });
         assert.equal(login.json.requiresVerification, false);
         assert.equal(login.json.emailVerificationRequired, false, 'login response carries server policy for UI messaging');
+        assert.equal(login.json.player.email_verified, false, 'login still reports pending verification in optional mode');
         const session = await b.get('/api/auth/session');
         assert.equal(session.status, 200);
         assert.equal(session.json.emailVerificationRequired, false, 'session endpoint exposes server policy too');
+        assert.equal(session.json.emailVerified, false, 'session reports actual verification state, not policy');
+
+        // local UI helpers: optional mode keeps pending status and disables resend from Settings
+        const notice = ({ emailVerified, emailVerificationRequired }) => {
+          if (emailVerified) return 'verified';
+          return emailVerificationRequired ? 'pending-required' : 'pending-optional';
+        };
+        const resendState = ({ emailVerified, emailVerificationRequired }) => ({
+          disabled: !emailVerified && !emailVerificationRequired,
+          callApi: !emailVerified && emailVerificationRequired,
+        });
+        assert.equal(notice({ emailVerified: false, emailVerificationRequired: false }), 'pending-optional');
+        assert.equal(notice({ emailVerified: false, emailVerificationRequired: true }), 'pending-required');
+        assert.equal(notice({ emailVerified: true, emailVerificationRequired: false }), 'verified');
+        assert.deepEqual(resendState({ emailVerified: false, emailVerificationRequired: false }), { disabled: true, callApi: false }, 'optional mode resend is disabled in Settings');
+        assert.deepEqual(resendState({ emailVerified: false, emailVerificationRequired: true }), { disabled: false, callApi: true }, 'required mode keeps resend enabled');
+
+        // backend resend remains protected and generic; UI chooses whether to call it
+        await b.must('/api/auth/resend-verification', { email });
+        assert.equal(mail.sent.length, 1, 'optional-mode resend endpoint still works when explicitly requested');
+        await b.must('/api/auth/verify-email', { token: mail.sent[0].token });
+        const afterVerify = await b.get('/api/auth/session');
+        assert.equal(afterVerify.json.emailVerified, true, 'session updates after real verification');
+        assert.equal(afterVerify.json.player.email_verified, true, 'session payload reports verified identity');
+
+        const loginAfterVerify = await b.must('/api/auth/login', { email, password: PW });
+        assert.equal(loginAfterVerify.json.player.email_verified, true, 'verified account reports true in optional mode too');
+
+        const optionalResendCount = mail.sent.length;
+        await b.must('/api/auth/resend-verification', { email });
+        assert.equal(mail.sent.length, optionalResendCount, 'already verified account does not receive another verify email');
 
         const s = cookieSocket(optional.port, b.cookieHeader);
         await until(() => s.welcome(), 'optional verification welcome');
         s.ws.close();
 
         // sensitive proof-of-email flow still requires verified status
-        const forgot = await b.post('/api/auth/forgot-password', { email });
+        const unverifiedEmail = `optional.unverified.${authSeq++}@test.local`;
+        const regUnverified = await b.post('/api/auth/register', { email: unverifiedEmail, username: `optuv${Date.now() % 1000000}`, password: PW, displayName: 'Optional UV' });
+        assert.equal(regUnverified.status, 201);
+        assert.equal(regUnverified.json.player.email_verified, false);
+        const forgot = await b.post('/api/auth/forgot-password', { email: unverifiedEmail });
         assert.equal(forgot.status, 200);
         assert.equal(forgot.json.debug, undefined, 'no reset token issued for unverified identity');
+
+        // registration/login messaging keeps optional-vs-required distinction
+        assert.match(reg.json.message, /optional|log in now/i);
+
+        const requiredMail = { sent: [], assertReady() {}, async sendVerification(m) { this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset() {} };
+        const required = await start({ ...fast, matchLog: quiet(), log: quiet(), emailSender: requiredMail, env: { ...process.env, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'true' } });
+        try {
+          const rb = new Browser(required.port); await rb.csrf();
+          const remail = `required.${authSeq++}@test.local`;
+          const rreg = await rb.post('/api/auth/register', { email: remail, username: `required${Date.now() % 1000000}`, password: PW, displayName: 'Required' });
+          assert.equal(rreg.status, 201, JSON.stringify(rreg.json));
+          assert.equal(rreg.json.player.email_verified, false);
+          assert.match(rreg.json.message, /verify your email/i, 'required mode registration message remains blocking');
+          const rlogin = await rb.must('/api/auth/login', { email: remail, password: PW });
+          assert.equal(rlogin.json.requiresVerification, true, 'required mode still blocks unverified lobby access');
+          await rb.must('/api/auth/resend-verification', { email: remail });
+          assert.equal(requiredMail.sent.length, 2, 'required mode resend sends another verification email');
+
+          const gateSock = cookieSocket(required.port, rb.cookieHeader);
+          await until(() => gateSock.msgs.some((m) => m.t === 'authRequired' && /verify/i.test(m.message || '')), 'required-mode websocket gate for unverified account');
+          gateSock.ws.close();
+
+          await rb.must('/api/auth/verify-email', { token: rreg.json.debug.verifyToken });
+          const reqSession = await rb.get('/api/auth/session');
+          assert.equal(reqSession.json.emailVerified, true, 'required mode session updates after verification');
+          const verifiedLogin = await rb.must('/api/auth/login', { email: remail, password: PW });
+          assert.equal(verifiedLogin.json.player.email_verified, true, 'verified identity reports true in required mode');
+        } finally { await required.close(); }
+
+        const sessionAfterFlows = await b.get('/api/auth/session');
+        assert.equal(sessionAfterFlows.json.authenticated, true);
+        assert.equal(sessionAfterFlows.json.emailVerified, true);
+
+        const resendLabel = ({ emailVerificationRequired }) => emailVerificationRequired ? 'Resend verification email' : 'Resend verification email — Soon';
+        assert.equal(resendLabel({ emailVerificationRequired: false }), 'Resend verification email — Soon');
+        assert.equal(resendLabel({ emailVerificationRequired: true }), 'Resend verification email');
+
+        const pendingLine = ({ emailVerificationRequired }) => emailVerificationRequired
+          ? 'Please verify your email before entering the lobby.'
+          : 'You can play normally. Email verification is optional during friend testing.';
+        assert.match(pendingLine({ emailVerificationRequired: false }), /optional during friend testing/);
+        assert.match(pendingLine({ emailVerificationRequired: true }), /before entering the lobby/);
+
+        const optionalForgot = await b.post('/api/auth/forgot-password', { email });
+        assert.equal(optionalForgot.status, 200);
+        assert.equal(optionalForgot.json.debug, undefined, 'forgot-password remains generic after optional-mode flows');
+
+        const guestRequired = await start({ ...fast, matchLog: quiet(), log: quiet(), emailSender: { sent: [], assertReady() {}, async sendVerification(m) { this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset() {} }, env: { ...process.env, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'true' } });
+        try {
+          const gb = new Browser(guestRequired.port);
+          const gs = await gb.get('/api/auth/session');
+          assert.equal(gs.json.emailVerificationRequired, true, 'required-mode guest session advertises strict policy');
+        } finally { await guestRequired.close(); }
+
+        const resendUnknown = await b.post('/api/auth/resend-verification', { email: `nobody.${authSeq++}@test.local` });
+        assert.equal(resendUnknown.status, 200);
+        assert.match(String(resendUnknown.json.message || ''), /If this account exists/i, 'resend response remains non-enumerating');
+
+        const freshOptional = await start({ ...fast, matchLog: quiet(), log: quiet(), emailSender: { sent: [], assertReady() {}, async sendVerification(m) { this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset() {} }, env: { ...process.env, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'false' } });
+        try {
+          const ob = new Browser(freshOptional.port); await ob.csrf();
+          const oe = `fresh.optional.${authSeq++}@test.local`;
+          await ob.post('/api/auth/register', { email: oe, username: `fo${Date.now() % 1000000}`, password: PW, displayName: 'FreshOpt' });
+          const os = await ob.get('/api/auth/session');
+          assert.equal(os.json.emailVerified, false, 'optional mode keeps pending status until real verification');
+        } finally { await freshOptional.close(); }
+
+        const finalSock = cookieSocket(optional.port, b.cookieHeader);
+        await until(() => finalSock.welcome(), 'verified optional welcome');
+        finalSock.ws.close();
+
+        assert.equal((await b.get('/api/auth/session')).json.authenticated, true);
       } finally { await optional.close(); }
     });
 

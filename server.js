@@ -884,7 +884,7 @@ function start(opts = {}) {
     }
 
     const auth = await dbAuth.sessionInfo(p.token);
-    if (dbPool.hasDatabase() && !auth.emailVerified) {
+    if (dbPool.hasDatabase() && dbAuth.isEmailVerificationRequired() && !auth.emailVerified) {
       send(ws, { t: 'authRequired', message: 'Please verify your email before entering the lobby.' });
       return ws.close(1008, 'email verification required');
     }

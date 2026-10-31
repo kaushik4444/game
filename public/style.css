@@ -446,6 +446,10 @@ select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 .verify-pill { display: inline-flex; align-items: center; justify-content: center; min-width: 74px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--panel-line); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; font-weight: 700; }
 .verify-pill.required { background: rgba(255, 201, 77, .12); border-color: rgba(255, 201, 77, .5); color: var(--gold); }
 .verify-pill.optional { background: rgba(127, 240, 218, .12); border-color: rgba(127, 240, 218, .5); color: #7ff0da; }
+.verify-pill.verified { background: rgba(120, 220, 150, .14); border-color: rgba(120, 220, 150, .5); color: #7fe3a0; }
+.verify-status { align-items: flex-start; }
+.verify-status .btn[disabled], .verify-status .btn[aria-disabled="true"] { opacity: .6; cursor: not-allowed; }
+.verify-status small { max-width: 34ch; }
 .wn-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
 .wn-list li { display: flex; gap: 12px; align-items: flex-start; }
 .wn-list .wn-ico { font-size: 22px; line-height: 1.2; }

@@ -217,7 +217,7 @@ const matchOf = (over = {}) => ({ matchKey: uuid(), roomCode: 'ABCDEF', gameId: 
         const reg = await dbAuth.registerEmail({ email, username: `opt${String(Date.now()).slice(-6)}`, password: 'TestPass123!', displayName: 'Optional' });
         const info = await dbAuth.sessionInfo(reg.token);
         assert.equal(info.authenticated, true);
-        assert.equal(info.emailVerified, true, 'lobby access gate is open when verification is optional');
+        assert.equal(info.emailVerified, false, 'optional mode does not mark an identity as verified');
         const row = (await x.query('SELECT email_verified_at FROM auth_identities WHERE provider = $1 AND provider_user_id = $2 LIMIT 1', ['email', email])).rows[0];
         assert.equal(row.email_verified_at, null, 'identity remains unverified in storage');
       } finally {

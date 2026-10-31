@@ -226,10 +226,6 @@ async function loginEmail({ email, password }) {
   return makeSessionResult(row, await createSession(db, row.id));
 }
 
-function emailVerifiedForAccess(row) {
-  return !isEmailVerificationRequired() || Boolean(row && row.email_verified_at);
-}
-
 async function resendVerification({ email }) {
   if (!db.hasDatabase()) throw new AuthError('Email authentication requires PostgreSQL (set DATABASE_URL).', 503);
   const e = normEmail(email);
@@ -386,7 +382,7 @@ async function sessionInfo(rawToken) {
   const i = r.rows[0] || null;
   return {
     authenticated: true,
-    emailVerified: emailVerifiedForAccess(i),
+    emailVerified: Boolean(i && i.email_verified_at),
     provider: i ? i.provider : null,
     email: i ? i.email : null,
     player,
