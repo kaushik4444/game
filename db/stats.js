@@ -6,22 +6,28 @@ const pct = (wins, played) => (played ? Math.round((wins / played) * 1000) / 10 
  * Build a player's profile statistics from their finished matches. Pure (no I/O), shared by the in-memory and Postgres stores.
  *
  * rows: one per match the player really played (no bots, no early leavers), NEWEST FIRST:
- *   { gameId, finishedAt (Date|string), isWinner, score }
+ *   { gameId, finishedAt (Date|string), isWinner, score, options, seats }
+ *
+ * metrics(gameId) returns that game's stats description { kind, bestLabel, bestOf(row) } (see games/<id>/index.js).
+ * "Best" is only reported where a game defines a number that is comparable between games; raw scores are not
+ * (poker stacks depend on the starting chips, a 29 team always ends on the target, The Mind is co-operative).
  */
-function computeProfile(rows, { memberSince = null, recentCount = 10 } = {}) {
+function computeProfile(rows, { memberSince = null, recentCount = 10, metrics = () => null } = {}) {
   const played = rows.length;
   const wins = rows.filter((r) => r.isWinner).length;
 
   const byGame = new Map();
   for (const r of rows) {
-    const g = byGame.get(r.gameId) || { gameId: r.gameId, played: 0, wins: 0, best: null };
+    const meta = metrics(r.gameId);
+    const g = byGame.get(r.gameId) || { gameId: r.gameId, kind: (meta && meta.kind) || 'solo', played: 0, wins: 0, best: null, bestLabel: (meta && meta.bestLabel) || null, formatBest: meta && meta.formatBest };
     g.played++;
     if (r.isWinner) g.wins++;
-    if (Number.isFinite(r.score) && (g.best === null || r.score > g.best)) g.best = r.score;
+    const v = meta && typeof meta.bestOf === 'function' ? meta.bestOf(r) : null;
+    if (Number.isFinite(v) && (g.best === null || v > g.best)) g.best = v;
     byGame.set(r.gameId, g);
   }
   const perGame = [...byGame.values()]
-    .map((g) => ({ ...g, losses: g.played - g.wins, winRate: pct(g.wins, g.played) }))
+    .map(({ formatBest, ...g }) => ({ ...g, bestText: g.best === null ? null : formatBest ? formatBest(g.best) : String(g.best), losses: g.played - g.wins, winRate: pct(g.wins, g.played) }))
     .sort((a, b) => b.played - a.played || b.wins - a.wins || a.gameId.localeCompare(b.gameId));
 
   // streaks of consecutive wins; rows are newest first

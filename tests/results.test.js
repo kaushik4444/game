@@ -1,9 +1,11 @@
 'use strict';
 // Match history: every game must report per-seat results, and a finished room becomes exactly one correct record.
+require('./helpers/env'); // first: NODE_ENV=test, no .env loading, no DATABASE_URL (memory-mode test)
 const assert = require('node:assert/strict');
 const games = require('../games');
 const { buildMatchRecord } = require('../db/matchRecord');
 const dbMatches = require('../db/matches');
+const dbPool = require('../db/pool');
 
 let passed = 0;
 async function test(name, fn) {
@@ -40,6 +42,7 @@ const room = (id, members, extra = {}) => ({ code: 'ABC123', gameId: id, seats: 
 const seatsOf = (players) => players.map((p) => ({ id: p.id, name: p.name, bot: false }));
 
 (async () => {
+  assert.equal(dbPool.hasDatabase(), false, 'this file tests the in-memory store: it must never be connected to a real database');
   console.log('results per game');
   for (const [id, n, over] of [['wizard', 3, {}], ['wizard', 4, {}], ['twentynine', 4, {}], ['poker', 3, { limit: '10' }], ['poker', 2, { limit: '10' }], ['themind', 2, {}], ['themind', 3, {}]]) {
     await test(`${id} (${n} players) reports a result for every seat and at least one winner`, async () => {
@@ -105,15 +108,15 @@ const seatsOf = (players) => players.map((p) => ({ id: p.id, name: p.name, bot: 
   });
 
   await test('recording the same game twice stores it once; leavers and bots do not count in stats', async () => {
-    const members = [{ id: 'u1', name: 'A', bot: false }, { id: 'u2', name: 'B', bot: true }, { id: 'bot_x', name: 'Bot', bot: true }];
+    const members = [{ id: '00000000-0000-4000-8000-0000000000a1', name: 'A', bot: false }, { id: '00000000-0000-4000-8000-0000000000a2', name: 'B', bot: true }, { id: 'bot_x', name: 'Bot', bot: true }];
     const g = { results: () => [{ score: 3, winner: false }, { score: 9, winner: true }, { score: 1, winner: false }] };
-    const rec = buildMatchRecord(room('wizard', members, { matchKey: '22222222-2222-4222-8222-222222222222', leftEarly: new Set(['u2']) }), g);
+    const rec = buildMatchRecord(room('wizard', members, { matchKey: '22222222-2222-4222-8222-222222222222', leftEarly: new Set(['00000000-0000-4000-8000-0000000000a2']) }), g);
     const first = await dbMatches.recordMatch(rec);
     const second = await dbMatches.recordMatch(rec);
     assert.ok(first.matchId);
     assert.equal(second.duplicate, true);
-    assert.deepEqual(await dbMatches.getPlayerStats('u1'), { played: 1, wins: 0, losses: 1 });
-    assert.deepEqual(await dbMatches.getPlayerStats('u2'), { played: 0, wins: 0, losses: 0 }, 'a player who left is not credited');
+    assert.deepEqual(await dbMatches.getPlayerStats('00000000-0000-4000-8000-0000000000a1'), { played: 1, wins: 0, losses: 1 });
+    assert.deepEqual(await dbMatches.getPlayerStats('00000000-0000-4000-8000-0000000000a2'), { played: 0, wins: 0, losses: 0 }, 'a player who left is not credited');
   });
 
   console.log(`\n${passed} result tests passed`);

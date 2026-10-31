@@ -12,6 +12,8 @@ module.exports = {
   accent: '#4f6bff',
   tagline: 'No turns, no talking. Play your numbers in ascending order by feel alone.',
   seats: { min: 2, max: 4, default: 3 },
+  // 'coop': everybody at the table wins or loses together; the number to beat is how many levels the team cleared
+  stats: { kind: 'coop', bestLabel: 'Most levels cleared', bestOf: (row) => row.score },
   options: [
     {
       key: 'lives',

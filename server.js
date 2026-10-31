@@ -10,6 +10,7 @@ const { prepareDatabase } = require('./db/startup');
 const { buildMatchRecord } = require('./db/matchRecord');
 const dbPlayers = require('./db/players');
 const dbMatches = require('./db/matches');
+const { createMatchQueue, defaultSpoolDir } = require('./db/matchQueue');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = {
@@ -58,6 +59,18 @@ function start(opts = {}) {
   const maxNewAccountsPerMin = opts.maxNewAccountsPerMin ?? 120; // site-wide backstop: stops a spoofed-address flood from filling the database
   const maxPlayers = opts.maxPlayers ?? 5000; // players held in memory
   const database = opts.database || { prepare: () => prepareDatabase() };
+  // Finished games are saved in the background with retries; see db/matchQueue.js. `rooms` is declared below, which is fine:
+  // the callback only runs later.
+  const matchQueue = opts.matchQueue || createMatchQueue({
+    record: opts.matchRecord || ((rec) => dbMatches.recordMatch(rec)), // opts.matchRecord / matchLog: test hooks (failure injection, quiet logs)
+    log: opts.matchLog || console,
+    spoolDir: dbPool.hasDatabase() ? (opts.matchSpoolDir !== undefined ? opts.matchSpoolDir : defaultSpoolDir(env)) : null, // memory mode cannot fail, so it needs no spool
+    delays: opts.matchRetryDelays,
+    onGiveUp: (rec) => {
+      const room = rooms.get(rec.roomCode);
+      if (room && room.matchKey === rec.matchKey) sys(room, '⚠ The result of this game could not be saved right now, so it may be missing from stats.');
+    },
+  });
   const timeScale = opts.timeScale ?? 1; // tests shrink the turn time limit with this
   // Optional site-wide notice (set the ANNOUNCEMENT env var, or pass opts.announcement); shown as a dismissible banner on the home screen
   const announcement = cleanText(opts.announcement ?? process.env.ANNOUNCEMENT ?? '');
@@ -88,8 +101,10 @@ function start(opts = {}) {
     if (rel === '/readyz') {
       // readiness: the process is up AND the database answers (liveness is /healthz)
       const ok = (text) => { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end(text); };
-      if (!dbPool.hasDatabase()) ok('ready (in-memory store)');
-      else dbPool.ping().then(() => ok('ready'), () => { res.writeHead(503, { 'Content-Type': 'text/plain' }); res.end('database unavailable'); });
+      const q = matchQueue.stats();
+      const tail = q.pending || q.failed ? ` (matches: ${q.pending} pending, ${q.failed} failed)` : '';
+      if (!dbPool.hasDatabase()) ok('ready (in-memory store)' + tail);
+      else dbPool.ping().then(() => ok('ready' + tail), () => { res.writeHead(503, { 'Content-Type': 'text/plain' }); res.end('database unavailable'); });
       return;
     }
     if (rel.includes('\0')) {
@@ -244,7 +259,7 @@ function start(opts = {}) {
         try {
           const record = buildMatchRecord(room, g);
           if (!record) console.error(`[server] ${room.gameId} cannot report results; match not recorded`);
-          else dbMatches.recordMatch(record).catch((err) => console.error('[server] Failed to record match:', err.message));
+          else matchQueue.enqueue(record); // never blocks the game and never rejects; failures are retried and logged by the queue
         } catch (e) {
           console.error('[server] Error preparing match record:', e.message);
         }
@@ -953,9 +968,11 @@ function start(opts = {}) {
   ticker.unref();
   gc.unref();
 
-  function close() {
+  async function close({ drainMs = 0 } = {}) {
     clearInterval(ticker);
     clearInterval(gc);
+    if (drainMs) await matchQueue.drain(drainMs); // let pending match writes finish (shutdown)
+    matchQueue.close();
     for (const room of rooms.values()) clearTimeout(room.timer);
     for (const ws of wss.clients) ws.terminate();
     return new Promise((resolve) => wss.close(() => server.close(() => resolve())));
@@ -963,16 +980,29 @@ function start(opts = {}) {
 
   // Verify the database and run migrations BEFORE accepting anybody. Any failure rejects start(): the process must not
   // serve players on a database it cannot use (and in production it must not silently fall back to memory).
-  return database.prepare().then(
-    (info) => new Promise((resolve) => server.listen(port, () => resolve({ server, port: server.address().port, close, database: info })))
-  );
+  return database.prepare().then((info) => {
+    if (info && info.mode === 'postgres') matchQueue.replaySpool(); // results a previous run could not save
+    return new Promise((resolve) => server.listen(port, () => resolve({ server, port: server.address().port, close, database: info, matchQueue })));
+  });
 }
 
 module.exports = { start };
 
 if (require.main === module) {
   start().then(
-    ({ port, database }) => console.log(`Tableverse running on http://localhost:${port} (${database.mode} store)`),
+    ({ port, database, close }) => {
+      console.log(`Tableverse running on http://localhost:${port} (${database.mode} store)`);
+      // Render sends SIGTERM on deploy/restart: finish pending match writes first (it waits 30 s before killing us)
+      let stopping = false;
+      const stop = (sig) => {
+        if (stopping) return;
+        stopping = true;
+        console.log(`[server] ${sig}: finishing pending match writes, then exiting`);
+        close({ drainMs: 15000 }).then(() => process.exit(0), () => process.exit(1));
+      };
+      process.on('SIGTERM', () => stop('SIGTERM'));
+      process.on('SIGINT', () => stop('SIGINT'));
+    },
     (err) => {
       console.error('[server] FATAL: refusing to start:', err.message);
       process.exit(1);

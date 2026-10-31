@@ -1,5 +1,6 @@
 'use strict';
 // Production configuration: startup must fail loudly instead of running on the wrong database, plus the abuse limits.
+require('./helpers/env'); // first: NODE_ENV=test, no .env loading, no DATABASE_URL (memory-mode test)
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');

@@ -9,6 +9,9 @@ module.exports = {
   accent: '#d64545',
   tagline: 'The classic South Asian trick-taking game for two teams of two. Bid, hide your trump, and take the points.',
   seats: { min: 4, max: 4, default: 4 },
+  // 'team': a win means your TEAM won. No "best score": a winning team always ends on about the same game points,
+  // so a maximum would say nothing.
+  stats: { kind: 'team', bestLabel: null, bestOf: null },
   seatLabel: (i) => (i % 2 === 0 ? 'Team A' : 'Team B'),
   options: [
     {

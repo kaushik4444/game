@@ -13,6 +13,8 @@ module.exports = {
   accent: '#7b4bd0',
   tagline: 'Predict exactly how many tricks you will win. Trump, wizards and jesters make it wild.',
   seats: { min: 3, max: 6, default: 4 },
+  // how this game appears in a player's stats. 'solo': every player wins or loses on their own (ties share the win)
+  stats: { kind: 'solo', bestLabel: 'Highest score', bestOf: (row) => row.score },
   options: [
     {
       key: 'variant',

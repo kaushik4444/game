@@ -9,6 +9,17 @@ module.exports = {
   accent: '#1f6fe0',
   tagline: "Texas Hold'em with chips and blinds. Read the table, bet, bluff, and take everyone's stack.",
   seats: { min: 2, max: 8, default: 5 },
+  // A stack of 3,000 means something different after 1,000 and after 5,000 starting chips, so the best result is the
+  // final stack as a multiple of the starting chips.
+  stats: {
+    kind: 'solo',
+    bestLabel: 'Best stack (× starting chips)',
+    bestOf: (row) => {
+      const start = Number(row.options && row.options.chips) || 1000;
+      return Number.isFinite(row.score) ? Math.round((row.score / start) * 10) / 10 : null;
+    },
+    formatBest: (v) => '×' + v,
+  },
   options: [
     {
       key: 'chips',

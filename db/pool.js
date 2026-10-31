@@ -33,7 +33,8 @@ function loadEnv() {
   }
 }
 
-loadEnv();
+// Tests must never pick up a developer's real DATABASE_URL from a .env file (that is how test rows end up in production).
+if (process.env.NODE_ENV !== 'test' && !process.env.TABLEVERSE_SKIP_DOTENV) loadEnv();
 
 let pg;
 try {

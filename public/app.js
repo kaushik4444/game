@@ -701,7 +701,7 @@
 
   // ------------------------------------------------------------ player stats
   const statsGame = (id) => gameMeta(id) || { name: id, icon: '🎴' };
-  const BEST_LABEL = { wizard: 'Best score', twentynine: 'Best team score', poker: 'Biggest stack', themind: 'Furthest level' };
+  const KIND_NOTE = { team: 'team game: a win means your team won', coop: 'co-operative: the whole table wins or loses together' };
   const fmtDate = (iso) => { try { return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return ''; } };
 
   function openStats() {
@@ -727,7 +727,7 @@
     const tile = (label, value, cls = '') => `<div class="stat-tile ${cls}"><span class="stat-v">${value}</span><span class="stat-l">${label}</span></div>`;
     const games = s.perGame.map((g) => {
       const meta = statsGame(g.gameId);
-      return `<div class="stat-game"><span class="stat-game-name">${esc(meta.icon || '🎴')} ${esc(meta.name)}</span><span class="stat-game-rec">${g.wins}W · ${g.losses}L</span><span class="stat-bar" aria-hidden="true"><i style="width:${g.winRate || 0}%"></i></span><span class="stat-game-pct">${g.winRate}%</span>${g.best !== null ? `<span class="stat-game-best">${esc(BEST_LABEL[g.gameId] || 'Best score')}: <b>${g.best}</b></span>` : ''}</div>`;
+      return `<div class="stat-game"><span class="stat-game-name">${esc(meta.icon || '🎴')} ${esc(meta.name)}${KIND_NOTE[g.kind] ? ` <small class="stat-kind" title="${esc(KIND_NOTE[g.kind])}">${g.kind === 'coop' ? 'co-op' : 'teams'}</small>` : ''}</span><span class="stat-game-rec">${g.wins}W · ${g.losses}L</span><span class="stat-bar" aria-hidden="true"><i style="width:${g.winRate || 0}%"></i></span><span class="stat-game-pct">${g.winRate}%</span>${g.best !== null && g.bestLabel ? `<span class="stat-game-best">${esc(g.bestLabel)}: <b>${esc(g.bestText)}</b></span>` : ''}</div>`;
     }).join('');
     const recent = s.recent.map((r) => `<span class="stat-chip ${r.won ? 'w' : 'l'}" title="${esc(statsGame(r.gameId).name)} · ${esc(fmtDate(r.finishedAt))}">${esc(statsGame(r.gameId).icon || '🎴')}<b>${r.won ? 'W' : 'L'}</b></span>`).join('');
     body.innerHTML = `
@@ -744,7 +744,7 @@
       <div class="stat-games">${games}</div>
       <h3 class="stat-h">Last ${s.recent.length} games <small>(newest first)</small></h3>
       <div class="stat-recent">${recent}</div>
-      <p class="hint" style="text-align:left;margin-top:12px">${s.lastPlayed ? `Last played ${esc(fmtDate(s.lastPlayed))}. ` : ''}${s.memberSince ? `Playing since ${esc(fmtDate(s.memberSince))}. ` : ''}Your stats belong to the player saved in this browser, so clearing site data starts a new player.</p>`;
+      <p class="hint" style="text-align:left;margin-top:12px">Ties share the win. ${s.lastPlayed ? `Last played ${esc(fmtDate(s.lastPlayed))}. ` : ''}${s.memberSince ? `Playing since ${esc(fmtDate(s.memberSince))}. ` : ''}Your stats belong to the player saved in this browser, so clearing site data starts a new player.</p>`;
   }
 
   function openActivityLog() {

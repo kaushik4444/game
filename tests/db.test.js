@@ -1,4 +1,5 @@
 'use strict';
+require('./helpers/env'); // first: NODE_ENV=test, no .env loading, no DATABASE_URL (memory-mode test)
 const assert = require('assert');
 const dbPlayers = require('../db/players');
 const dbMatches = require('../db/matches');
