@@ -13,9 +13,10 @@ async function post(port, path, body) {
   return json;
 }
 
-async function registerAndVerify(port, { email, password = 'TestPass123!', displayName = 'Player', avatar = '🧙' }) {
+async function registerAndVerify(port, { email, username, password = 'TestPass123!', displayName = 'Player', avatar = '🧙' }) {
   try {
-    const reg = await post(port, '/api/auth/register', { email, password, displayName, avatar });
+    const handle = (username || String(displayName || 'player').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 18) || 'player') + String(Math.floor(Math.random() * 100000));
+    const reg = await post(port, '/api/auth/register', { email, username: handle.slice(0, 24), password, displayName, avatar });
     const verifyToken = reg && reg.debug && reg.debug.verifyToken;
     if (!verifyToken) throw new Error('Missing debug verify token in test mode');
     await post(port, '/api/auth/verify-email', { token: verifyToken });

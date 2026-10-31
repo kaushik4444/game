@@ -12,6 +12,8 @@ const dbPlayers = require('./db/players');
 const dbAuth = require('./db/auth');
 const dbMatches = require('./db/matches');
 const { createMatchQueue, defaultSpoolDir } = require('./db/matchQueue');
+const { hitRateLimit } = require('./db/rateLimit');
+const { makeAuthEmailSender } = require('./lib/email');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = {
@@ -120,18 +122,76 @@ function start(opts = {}) {
   };
 
   const includeDebugTokens = env.NODE_ENV === 'test';
+  const emailSender = opts.emailSender || makeAuthEmailSender({ env, logger: opts.log || console });
+  const testRate = (prodLimit, testLimit, envKey) => Number(env[envKey] || (includeDebugTokens ? testLimit : prodLimit));
 
-  const sendEmail = async ({ purpose, email, token }) => {
-    const app = String(process.env.PUBLIC_APP_URL || '').trim().replace(/\/$/, '');
-    const verifyUrl = app ? `${app}/verify-email.html?token=${encodeURIComponent(token)}` : null;
-    const resetUrl = app ? `${app}/reset-password.html?token=${encodeURIComponent(token)}` : null;
-
-    if (purpose === 'verify_email') {
-      console.log('[auth:email] verification requested for', email, verifyUrl ? `-> ${verifyUrl}` : '(set PUBLIC_APP_URL and email provider to send real emails)');
-    } else if (purpose === 'password_reset') {
-      console.log('[auth:email] password reset requested for', email, resetUrl ? `-> ${resetUrl}` : '(set PUBLIC_APP_URL and email provider to send real emails)');
-    }
+  const authRateConfig = {
+    registerIp: { scope: 'auth:register:ip', limit: testRate(8, 500, 'RL_REGISTER_IP_LIMIT'), windowMs: 10 * 60 * 1000 },
+    registerEmail: { scope: 'auth:register:email', limit: testRate(4, 100, 'RL_REGISTER_EMAIL_LIMIT'), windowMs: 60 * 60 * 1000 },
+    loginIp: { scope: 'auth:login:ip', limit: testRate(25, 1000, 'RL_LOGIN_IP_LIMIT'), windowMs: 10 * 60 * 1000 },
+    loginEmail: { scope: 'auth:login:email', limit: testRate(8, 200, 'RL_LOGIN_EMAIL_LIMIT'), windowMs: 15 * 60 * 1000 },
+    resendIp: { scope: 'auth:resend:ip', limit: testRate(10, 400, 'RL_RESEND_IP_LIMIT'), windowMs: 60 * 60 * 1000 },
+    resendEmail: { scope: 'auth:resend:email', limit: testRate(3, 100, 'RL_RESEND_EMAIL_LIMIT'), windowMs: 60 * 60 * 1000 },
+    forgotIp: { scope: 'auth:forgot:ip', limit: testRate(10, 400, 'RL_FORGOT_IP_LIMIT'), windowMs: 60 * 60 * 1000 },
+    forgotEmail: { scope: 'auth:forgot:email', limit: testRate(5, 100, 'RL_FORGOT_EMAIL_LIMIT'), windowMs: 60 * 60 * 1000 },
+    resetIp: { scope: 'auth:reset:ip', limit: testRate(12, 400, 'RL_RESET_IP_LIMIT'), windowMs: 60 * 60 * 1000 },
+    resetToken: { scope: 'auth:reset:token', limit: testRate(6, 150, 'RL_RESET_TOKEN_LIMIT'), windowMs: 15 * 60 * 1000 },
   };
+
+  const requestIp = (req) => {
+    const xff = trustProxy ? String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() : '';
+    return xff || req.socket.remoteAddress || 'unknown';
+  };
+
+  async function checkAuthLimit(res, checks) {
+    for (const c of checks) {
+      if (!c || !c.key) continue;
+      const out = await hitRateLimit({ scope: c.scope, key: c.key, limit: c.limit, windowMs: c.windowMs });
+      if (!out.allowed) {
+        res.setHeader('Retry-After', String(Math.max(1, Math.ceil(out.resetMs / 1000))));
+        sendJson(res, 429, { ok: false, error: 'Too many requests. Please wait and try again.' });
+        return false;
+      }
+    }
+    return true;
+  }
+
+  const normEmail = (s) => String(s || '').trim().toLowerCase();
+  const normUsername = (s) => String(s || '').trim().toLowerCase();
+  const hashKey = (s) => crypto.createHash('sha256').update(String(s || '')).digest('hex');
+
+  const deliverVerification = async ({ email, token }) => emailSender.sendVerification({ email, token });
+  const deliverReset = async ({ email, token }) => emailSender.sendPasswordReset({ email, token });
+
+  const secureCookie = production ? '; Secure' : '';
+  const sessionCookie = (token) => `ct_session=${encodeURIComponent(token)}; Path=/; Max-Age=${60 * 60 * 24 * 30}; HttpOnly; SameSite=Lax${secureCookie}`;
+  const clearSessionCookie = () => `ct_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${secureCookie}`;
+  const readCookieToken = (req) => {
+    const raw = String(req.headers.cookie || '');
+    for (const chunk of raw.split(';')) {
+      const [k, v] = chunk.trim().split('=');
+      if (k === 'ct_session' && v) return decodeURIComponent(v);
+    }
+    return null;
+  };
+
+  const setSession = (res, token) => res.setHeader('Set-Cookie', sessionCookie(token));
+  const clearSession = (res) => res.setHeader('Set-Cookie', clearSessionCookie());
+
+  function validateCsrf(req, body) {
+    const h = String(req.headers['x-csrf-token'] || '');
+    const b = body && typeof body.csrfToken === 'string' ? body.csrfToken : '';
+    if (!h || !b || h !== b) throw new Error('Invalid CSRF token.');
+  }
+
+  function ensureCsrfToken(req, res) {
+    const existing = String(req.headers['x-csrf-token'] || '').trim();
+    const csrf = existing || crypto.randomBytes(24).toString('hex');
+    res.setHeader('X-CSRF-Token', csrf);
+    return csrf;
+  }
+
+  const authTokenFromReq = (req, body) => (body && body.token) || readCookieToken(req);
 
   const server = http.createServer(async (req, res) => {
     let rel;
@@ -145,32 +205,108 @@ function start(opts = {}) {
     if (req.method === 'POST' && rel === '/api/auth/register') {
       try {
         const body = await readJsonBody(req);
+        const ip = requestIp(req);
+        if (!(await checkAuthLimit(res, [
+          { ...authRateConfig.registerIp, key: ip },
+          { ...authRateConfig.registerEmail, key: hashKey(normEmail(body.email)) },
+        ]))) return;
         const out = await dbAuth.registerEmail({
           email: body.email,
+          username: body.username,
           password: body.password,
           displayName: body.displayName,
           avatar: body.avatar,
         });
-        await sendEmail({ purpose: 'verify_email', email: out.email, token: out.verifyToken });
+        if (!includeDebugTokens) await deliverVerification({ email: out.email, token: out.verifyToken });
+        setSession(res, out.token);
+        const csrfToken = ensureCsrfToken(req, res);
         return sendJson(res, 201, {
           ok: true,
           requiresVerification: true,
-          token: out.token,
+          token: includeDebugTokens ? out.token : undefined,
+          csrfToken,
           player: out.player,
           ...(includeDebugTokens ? { debug: { verifyToken: out.verifyToken } } : {}),
           message: 'Account created. Please verify your email before entering the lobby.',
         });
       } catch (err) {
-        const msg = /already exists/i.test(err.message) ? err.message : /valid email|Password must/i.test(err.message) ? err.message : 'Registration failed.';
-        return sendJson(res, /already exists|valid email|Password must/i.test(msg) ? 400 : 500, { ok: false, error: msg });
+        const msg = /already exists|username|valid email|Password must/i.test(err.message) ? err.message : /Email delivery failed/i.test(err.message) ? err.message : 'Registration failed.';
+        return sendJson(res, /already exists|username|valid email|Password must|Email delivery failed/i.test(msg) ? 400 : 500, { ok: false, error: msg });
+      }
+    }
+
+    if (req.method === 'GET' && rel === '/api/auth/username-available') {
+      try {
+        const url = new URL(req.url, 'http://x');
+        const out = await dbAuth.checkUsernameAvailability({ username: url.searchParams.get('username') || '' });
+        return sendJson(res, 200, { ok: true, ...out });
+      } catch (err) {
+        return sendJson(res, 500, { ok: false, error: err.message || 'Could not check username.' });
+      }
+    }
+
+    if (req.method === 'GET' && rel === '/api/auth/csrf') {
+      const csrfToken = ensureCsrfToken(req, res);
+      return sendJson(res, 200, { ok: true, csrfToken });
+    }
+
+    if (req.method === 'GET' && rel === '/api/auth/session') {
+      const tok = readCookieToken(req);
+      if (!tok) return sendJson(res, 200, { ok: true, authenticated: false });
+      const info = await dbAuth.sessionInfo(tok);
+      const csrfToken = ensureCsrfToken(req, res);
+      return sendJson(res, 200, { ok: true, authenticated: !!(info && info.authenticated), player: info.player || null, emailVerified: !!info.emailVerified, csrfToken });
+    }
+
+    if (req.method === 'POST' && rel === '/api/auth/logout-all') {
+      try {
+        const body = await readJsonBody(req);
+        validateCsrf(req, body);
+        const tok = authTokenFromReq(req, body);
+        await dbAuth.revokeSession(tok);
+        clearSession(res);
+        return sendJson(res, 200, { ok: true });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err.message || 'Logout failed.' });
+      }
+    }
+
+    if (req.method === 'POST' && rel === '/api/auth/ws-token') {
+      try {
+        const body = await readJsonBody(req);
+        validateCsrf(req, body);
+        const tok = readCookieToken(req);
+        if (!tok) return sendJson(res, 401, { ok: false, error: 'Not authenticated.' });
+        return sendJson(res, 200, { ok: true, token: tok });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err.message || 'Could not issue websocket token.' });
+      }
+    }
+
+    if (req.method === 'POST' && rel === '/api/auth/logout') {
+      try {
+        const body = await readJsonBody(req);
+        validateCsrf(req, body);
+        await dbAuth.revokeSession(authTokenFromReq(req, body));
+        clearSession(res);
+        return sendJson(res, 200, { ok: true });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err.message || 'Logout failed.' });
       }
     }
 
     if (req.method === 'POST' && rel === '/api/auth/login') {
       try {
         const body = await readJsonBody(req);
+        const ip = requestIp(req);
+        if (!(await checkAuthLimit(res, [
+          { ...authRateConfig.loginIp, key: ip },
+          { ...authRateConfig.loginEmail, key: hashKey(normEmail(body.email)) },
+        ]))) return;
         const out = await dbAuth.loginEmail({ email: body.email, password: body.password });
-        return sendJson(res, 200, { ok: true, token: out.token, player: out.player, requiresVerification: !out.player.email_verified });
+        setSession(res, out.token);
+        const csrfToken = ensureCsrfToken(req, res);
+        return sendJson(res, 200, { ok: true, token: includeDebugTokens ? out.token : undefined, csrfToken, player: out.player, requiresVerification: !out.player.email_verified });
       } catch (err) {
         const msg = /Invalid email or password/i.test(err.message) ? err.message : 'Login failed.';
         return sendJson(res, /Invalid email or password/i.test(msg) ? 401 : 500, { ok: false, error: msg });
@@ -180,14 +316,20 @@ function start(opts = {}) {
     if (req.method === 'POST' && rel === '/api/auth/resend-verification') {
       try {
         const body = await readJsonBody(req);
+        const ip = requestIp(req);
+        if (!(await checkAuthLimit(res, [
+          { ...authRateConfig.resendIp, key: ip },
+          { ...authRateConfig.resendEmail, key: hashKey(normEmail(body.email)) },
+        ]))) return;
         const out = await dbAuth.resendVerification({ email: body.email });
-        if (out && out.verifyToken && out.email) await sendEmail({ purpose: 'verify_email', email: out.email, token: out.verifyToken });
+        if (out && out.verifyToken && out.email && !includeDebugTokens) await deliverVerification({ email: out.email, token: out.verifyToken });
         return sendJson(res, 200, {
           ok: true,
           ...(includeDebugTokens && out && out.verifyToken ? { debug: { verifyToken: out.verifyToken } } : {}),
           message: 'If this account exists, a verification email has been sent.',
         });
-      } catch {
+      } catch (err) {
+        if (/Email delivery failed/i.test(err.message || '')) return sendJson(res, 503, { ok: false, error: err.message });
         return sendJson(res, 500, { ok: false, error: 'Could not process request.' });
       }
     }
@@ -205,14 +347,19 @@ function start(opts = {}) {
     if (req.method === 'POST' && rel === '/api/auth/forgot-password') {
       try {
         const body = await readJsonBody(req);
+        const ip = requestIp(req);
+        if (!(await checkAuthLimit(res, [
+          { ...authRateConfig.forgotIp, key: ip },
+          { ...authRateConfig.forgotEmail, key: hashKey(normEmail(body.email)) },
+        ]))) return;
         const out = await dbAuth.requestPasswordReset({ email: body.email });
-        if (out && out.resetToken && out.email) await sendEmail({ purpose: 'password_reset', email: out.email, token: out.resetToken });
-        return sendJson(res, 200, {
+        if (out && out.resetToken && out.email && !includeDebugTokens) await deliverReset({ email: out.email, token: out.resetToken });        return sendJson(res, 200, {
           ok: true,
           ...(includeDebugTokens && out && out.resetToken ? { debug: { resetToken: out.resetToken } } : {}),
           message: 'If this account exists, a reset email has been sent.',
         });
-      } catch {
+      } catch (err) {
+        if (/Email delivery failed/i.test(err.message || '')) return sendJson(res, 503, { ok: false, error: err.message });
         return sendJson(res, 500, { ok: false, error: 'Could not process request.' });
       }
     }
@@ -220,20 +367,16 @@ function start(opts = {}) {
     if (req.method === 'POST' && rel === '/api/auth/reset-password') {
       try {
         const body = await readJsonBody(req);
+        const ip = requestIp(req);
+        if (!(await checkAuthLimit(res, [
+          { ...authRateConfig.resetIp, key: ip },
+          { ...authRateConfig.resetToken, key: hashKey(body.token || '') },
+        ]))) return;
         await dbAuth.resetPassword({ token: body.token, newPassword: body.newPassword });
+        clearSession(res);
         return sendJson(res, 200, { ok: true, message: 'Password updated. Please log in again.' });
       } catch (err) {
         return sendJson(res, 400, { ok: false, error: err.message || 'Reset failed.' });
-      }
-    }
-
-    if (req.method === 'POST' && rel === '/api/auth/logout') {
-      try {
-        const body = await readJsonBody(req);
-        await dbAuth.revokeSession(body.token);
-        return sendJson(res, 200, { ok: true });
-      } catch {
-        return sendJson(res, 200, { ok: true });
       }
     }
 
@@ -935,18 +1078,19 @@ function start(opts = {}) {
   async function handleHello(ws, msg) {
     if (ws.readyState !== 1) return; // the socket closed while waiting in the queue
 
-    if (!msg || typeof msg.token !== 'string' || !msg.token) {
+    const presentedToken = (msg && typeof msg.token === 'string' && msg.token) || ws.cookieToken || null;
+    if (!presentedToken) {
       send(ws, { t: 'authRequired', message: 'Please log in to play.' });
       return ws.close(1008, 'auth required');
     }
 
-    let p = tokens.get(msg.token) || null;
+    let p = tokens.get(presentedToken) || null;
     if (!p) {
-      const dbPlayer = await dbPlayers.authenticateToken(msg.token);
+      const dbPlayer = await dbPlayers.authenticateToken(presentedToken);
       if (dbPlayer) {
         p = {
           id: dbPlayer.id,
-          token: msg.token,
+          token: presentedToken,
           name: dbPlayer.display_name,
           avatar: dbPlayer.avatar,
           createdAt: dbPlayer.created_at,
@@ -995,6 +1139,7 @@ function start(opts = {}) {
 
   wss.on('connection', (ws, req) => {
     ws.ip = clientIp(req);
+    ws.cookieToken = readCookieToken(req);
     const open = (socketsByIp.get(ws.ip) || 0) + 1;
     socketsByIp.set(ws.ip, open);
     ws.once('close', () => {
@@ -1115,6 +1260,7 @@ function start(opts = {}) {
   // Verify the database and run migrations BEFORE accepting anybody. Any failure rejects start(): the process must not
   // serve players on a database it cannot use (and in production it must not silently fall back to memory).
   return database.prepare().then((info) => {
+    if (production && info && info.mode === 'postgres') emailSender.assertReady();
     if (info && info.mode === 'postgres') matchQueue.replaySpool(); // results a previous run could not save
     return new Promise((resolve) => server.listen(port, () => resolve({ server, port: server.address().port, close, database: info, matchQueue })));
   });

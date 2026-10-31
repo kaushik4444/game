@@ -38,8 +38,8 @@ const matchOf = (over = {}) => ({ matchKey: uuid(), roomCode: 'ABCDEF', gameId: 
     await test('three instances starting at once apply every migration exactly once (advisory lock)', async () => {
       const results = await Promise.all([migrate(), migrate(), migrate()]);
       const applied = results.flatMap((r) => r.applied);
-      assert.deepEqual(applied.sort(), ['001_init.sql', '002_match_integrity.sql']);
-      assert.equal((await x.query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n, 2);
+      assert.deepEqual(applied.sort(), ['001_init.sql', '002_match_integrity.sql', '003_auth_accounts.sql', '004_auth_hardening.sql']);
+      assert.equal((await x.query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n, 4);
     });
     await test('running migrations again changes nothing', async () => {
       assert.deepEqual((await migrate()).applied, []);
@@ -50,6 +50,53 @@ const matchOf = (over = {}) => ({ matchKey: uuid(), roomCode: 'ABCDEF', gameId: 
       const idx = (await x.query("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_matches_match_key'")).rows[0].indexdef;
       assert.match(idx, /UNIQUE/);
       assert.match(idx, /WHERE \(match_key IS NOT NULL\)/);
+    });
+    await test('auth session index predicate is immutable (no NOW)', async () => {
+      const idx = (await x.query("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_auth_sessions_valid'"));
+      assert.ok(idx.rows.length, 'idx_auth_sessions_valid exists');
+      assert.doesNotMatch(idx.rows[0].indexdef, /NOW\(/i);
+      assert.match(idx.rows[0].indexdef, /WHERE \(revoked_at IS NULL\)/i);
+    });
+    await test('upgrade from main schema to 003 succeeds (auth migration has no volatile index predicate)', async () => {
+      const old = await t.another(); extra.push(old.name);
+      const fs = require('node:fs');
+      const pg = require('pg');
+      const c = new pg.Client({ connectionString: old.url });
+      await c.connect();
+      try {
+        const sql001 = fs.readFileSync(path.join(__dirname, '..', 'db', 'migrations', '001_init.sql'), 'utf8');
+        const sql002 = fs.readFileSync(path.join(__dirname, '..', 'db', 'migrations', '002_match_integrity.sql'), 'utf8');
+        await c.query(sql001);
+        await c.query(sql002);
+        await c.query("INSERT INTO schema_migrations (version) VALUES ('001_init.sql'), ('002_match_integrity.sql')");
+        const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'db', 'migrate.js')], { env: { ...process.env, DATABASE_URL: old.url }, encoding: 'utf8', timeout: 30000 });
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        assert.match(r.stdout, /Applied: 003_auth_accounts\.sql/);
+        const idx3 = await c.query("SELECT indexdef FROM pg_indexes WHERE indexname = 'idx_auth_sessions_valid'");
+        assert.ok(idx3.rows.length === 1, 'idx_auth_sessions_valid created by 003');
+        assert.doesNotMatch(idx3.rows[0].indexdef, /NOW\(/i);
+      } finally { await c.end(); }
+    });
+    await test('upgrade from the schema that is live today (001 only, with old rows): 002 applies and old data survives', async () => {
+      const old = await t.another(); extra.push(old.name);
+      const fs = require('node:fs');
+      const pg = require('pg');
+      const c = new pg.Client({ connectionString: old.url });
+      await c.connect();
+      try {
+        const sql001 = fs.readFileSync(path.join(__dirname, '..', 'db', 'migrations', '001_init.sql'), 'utf8');
+        await c.query(sql001);
+        await c.query("INSERT INTO schema_migrations (version) VALUES ('001_init.sql')");
+        const p = (await c.query("INSERT INTO players (display_name) VALUES ('Old') RETURNING id")).rows[0].id;
+        const m = (await c.query("INSERT INTO matches (room_code, game_id, seats) VALUES ('OLD001','wizard',2) RETURNING id")).rows[0].id;
+        await c.query("INSERT INTO match_participants (match_id, player_id, player_name, seat, score, is_winner, is_bot) VALUES ($1,$2,'Old',0,0,false,false)", [m, p]);
+        const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'db', 'migrate.js')], { env: { ...process.env, DATABASE_URL: old.url }, encoding: 'utf8', timeout: 30000 });
+        assert.equal(r.status, 0, r.stdout + r.stderr);
+        assert.match(r.stdout, /Applied: 002_match_integrity\.sql/);
+        assert.doesNotMatch(r.stdout, /Applying migration: 001/);
+        const kept = (await c.query('SELECT m.match_key, mp.left_early FROM matches m JOIN match_participants mp ON mp.match_id = m.id')).rows;
+        assert.deepEqual(kept, [{ match_key: null, left_early: false }], 'old rows are kept, with the new columns filled safely');
+      } finally { await c.end(); }
     });
     await test('a failing migration leaves the database exactly as it was (all or nothing)', async () => {
       const fs = require('node:fs');

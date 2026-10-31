@@ -65,7 +65,8 @@ function client(port, name, token) {
   let seq = 1;
   const authClient = async (name, p = port) => {
     const email = `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}.${seq++}@test.local`;
-    const { token } = await registerAndVerify(p, { email, displayName: name, password: 'TestPass123!' });
+    const username = `${name.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 16)}${seq}`;
+    const { token } = await registerAndVerify(p, { email, username, displayName: name, password: 'TestPass123!' });
     return client(p, name, token);
   };
 

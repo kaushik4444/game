@@ -15,8 +15,10 @@
   const S = {
     id: null,
     token: store.get('ct_token'), // issued by /api/auth/login or /api/auth/register
+    csrf: store.get('ct_csrf') || '',
     emailVerified: store.get('ct_email_verified') === '1',
     name: store.get('ct_name') || '',
+    username: store.get('ct_username') || '',
     games: [],
     room: null,
     view: null,
@@ -96,15 +98,117 @@
   const send = (msg) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); };
 
   async function postJson(url, body) {
+    const payload = Object.assign({}, body || {});
+    if (S.csrf && payload.csrfToken == null) payload.csrfToken = S.csrf;
+    const headers = { 'Content-Type': 'application/json' };
+    if (S.csrf) headers['X-CSRF-Token'] = S.csrf;
     const r = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body || {}),
+      headers,
+      body: JSON.stringify(payload),
     });
     let data = {};
     try { data = await r.json(); } catch { /* ignore */ }
+    const hdrCsrf = r.headers.get('x-csrf-token');
+    if (hdrCsrf) {
+      S.csrf = hdrCsrf;
+      store.set('ct_csrf', hdrCsrf);
+    }
+    if (data && data.csrfToken) {
+      S.csrf = data.csrfToken;
+      store.set('ct_csrf', data.csrfToken);
+    }
     if (!r.ok || data.ok === false) throw new Error(data.error || `Request failed (${r.status})`);
     return data;
+  }
+
+  async function ensureCsrf() {
+    if (S.csrf) return S.csrf;
+    const r = await fetch('/api/auth/csrf');
+    let out = {};
+    try { out = await r.json(); } catch { out = {}; }
+    const tok = (out && out.csrfToken) || r.headers.get('x-csrf-token') || '';
+    if (tok) {
+      S.csrf = tok;
+      store.set('ct_csrf', tok);
+    }
+    return S.csrf;
+  }
+
+  async function hydrateSession() {
+    if (!S.token) return false;
+    try {
+      const r = await fetch('/api/auth/session', {
+        headers: S.csrf ? { 'X-CSRF-Token': S.csrf } : {},
+      });
+      const out = await r.json();
+      const hdrCsrf = r.headers.get('x-csrf-token');
+      if (hdrCsrf) {
+        S.csrf = hdrCsrf;
+        store.set('ct_csrf', hdrCsrf);
+      }
+      if (!out || !out.ok || !out.authenticated) return false;
+      S.name = out.player && out.player.display_name ? out.player.display_name : S.name;
+      S.username = out.player && out.player.username ? out.player.username : S.username;
+      S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
+      S.emailVerified = !!out.emailVerified;
+      S.named = !!S.name;
+      if (S.name) store.set('ct_name', S.name);
+      if (S.username) store.set('ct_username', S.username);
+      if (S.avatar) store.set('ct_avatar', S.avatar);
+      store.set('ct_email_verified', S.emailVerified ? '1' : '0');
+      if (out.csrfToken) {
+        S.csrf = out.csrfToken;
+        store.set('ct_csrf', out.csrfToken);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function clearClientSession() {
+    S.token = '';
+    S.csrf = '';
+    store.set('ct_token', '');
+    store.set('ct_csrf', '');
+  }
+
+  async function doLogoutAll() {
+    try {
+      await ensureCsrf();
+      await postJson('/api/auth/logout-all', {});
+    } catch {
+      // ignore network failures; clear local state regardless
+    }
+    clearClientSession();
+    S.ready = false;
+    S.room = null;
+    S.view = null;
+    renderAuth('You have been logged out.', 'login');
+  }
+
+  async function doLogout() {
+    try {
+      await ensureCsrf();
+      await postJson('/api/auth/logout', {});
+    } catch {
+      // ignore network failures; clear local state regardless
+    }
+    clearClientSession();
+    S.ready = false;
+    S.room = null;
+    S.view = null;
+    renderAuth('Logged out.', 'login');
+  }
+
+  async function wsAuthToken() {
+    await ensureCsrf();
+    const out = await postJson('/api/auth/ws-token', {});
+    if (!out || !out.token) throw new Error('Missing websocket token');
+    S.token = out.token;
+    store.set('ct_token', S.token);
+    return out.token;
   }
 
   function authPageHTML(tab = 'login', msg = '') {
@@ -124,6 +228,9 @@
         ` : `
           <form id="registerForm" class="join-form">
             <input id="registerName" type="text" maxlength="20" required placeholder="Display name">
+            <input id="registerUsername" type="text" maxlength="24" required pattern="[a-z0-9_]{3,24}" placeholder="Username (lowercase, numbers, _)">
+            <small class="hint">Lowercase only, 3-24 chars.</small>
+            <small id="registerUsernameHint" class="hint"></small>
             <input id="registerEmail" type="email" required placeholder="Email">
             <input id="registerPassword" type="password" required minlength="8" placeholder="Password (8+ chars)">
             <button class="btn big-join" type="submit">Create account</button>
@@ -136,14 +243,20 @@
 
   async function doLogin(email, password) {
     const out = await postJson('/api/auth/login', { email, password });
-    S.token = out.token;
+    S.token = out.token || S.token;
+    if (out.csrfToken) {
+      S.csrf = out.csrfToken;
+      store.set('ct_csrf', out.csrfToken);
+    }
     S.name = out.player && out.player.display_name ? out.player.display_name : S.name;
+    S.username = out.player && out.player.username ? out.player.username : S.username;
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
     S.named = !!S.name;
     S.emailVerified = !!(out.player && out.player.email_verified);
-    store.set('ct_token', S.token);
+    store.set('ct_token', S.token || '');
     store.set('ct_email_verified', S.emailVerified ? '1' : '0');
     if (S.name) store.set('ct_name', S.name);
+    if (S.username) store.set('ct_username', S.username);
     if (S.avatar) store.set('ct_avatar', S.avatar);
     if (!S.emailVerified) {
       renderAuth('Please verify your email before entering the lobby.');
@@ -152,16 +265,22 @@
     connect();
   }
 
-  async function doRegister(name, email, password) {
-    const out = await postJson('/api/auth/register', { displayName: name, email, password, avatar: S.avatar || undefined });
-    S.token = out.token;
+  async function doRegister(name, username, email, password) {
+    const out = await postJson('/api/auth/register', { displayName: name, username, email, password, avatar: S.avatar || undefined });
+    S.token = out.token || S.token;
+    if (out.csrfToken) {
+      S.csrf = out.csrfToken;
+      store.set('ct_csrf', out.csrfToken);
+    }
     S.name = out.player && out.player.display_name ? out.player.display_name : name;
+    S.username = out.player && out.player.username ? out.player.username : String(username || '').toLowerCase();
     S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
     S.named = !!S.name;
     S.emailVerified = !!(out.player && out.player.email_verified);
-    store.set('ct_token', S.token);
+    store.set('ct_token', S.token || '');
     store.set('ct_email_verified', S.emailVerified ? '1' : '0');
     if (S.name) store.set('ct_name', S.name);
+    if (S.username) store.set('ct_username', S.username);
     if (S.avatar) store.set('ct_avatar', S.avatar);
     renderAuth('Account created. Check your email for a verification link.');
   }
@@ -182,12 +301,32 @@
     S.room = null;
     S.view = null;
     $app.innerHTML = authPageHTML(tab, msg);
+    const u = document.getElementById('registerUsername');
+    if (u) {
+      u.addEventListener('input', async () => {
+        const hint = document.getElementById('registerUsernameHint');
+        const value = String(u.value || '').trim().toLowerCase();
+        if (!hint) return;
+        if (!value) { hint.textContent = ''; return; }
+        if (!/^[a-z0-9_]{3,24}$/.test(value)) { hint.textContent = 'Use 3-24 chars: lowercase letters, numbers, underscore.'; return; }
+        try {
+          const out = await fetch(`/api/auth/username-available?username=${encodeURIComponent(value)}`).then((r) => r.json());
+          hint.textContent = out.available ? 'Username is available.' : 'Username is already taken.';
+        } catch {
+          hint.textContent = '';
+        }
+      });
+    }
   }
 
-  function connect() {
+  async function connect() {
     if (!S.token) {
-      renderAuth('', 'login');
-      return;
+      try {
+        await wsAuthToken();
+      } catch {
+        renderAuth('', 'login');
+        return;
+      }
     }
     ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
     ws.onopen = () => {
@@ -332,8 +471,7 @@
         break;
       }
       case 'authRequired':
-        store.set('ct_token', '');
-        S.token = '';
+        clearClientSession();
         S.ready = false;
         renderAuth(m.message || 'Please log in to continue.');
         break;
@@ -414,10 +552,11 @@
     if (e.target.id === 'registerForm') {
       e.preventDefault();
       const name = (document.getElementById('registerName') || {}).value;
+      const username = (document.getElementById('registerUsername') || {}).value;
       const email = (document.getElementById('registerEmail') || {}).value;
       const password = (document.getElementById('registerPassword') || {}).value;
       try {
-        await doRegister(name, email, password);
+        await doRegister(name, username, email, password);
       } catch (err) {
         renderAuth(err.message || 'Registration failed', 'register');
       }
@@ -449,8 +588,24 @@
     }
   }
 
-  if (!S.token) renderAuth('', 'login');
-  else connect();
+  (async () => {
+    if (!S.token) {
+      renderAuth('', 'login');
+      return;
+    }
+    await ensureCsrf();
+    const ok = await hydrateSession();
+    if (!ok) {
+      clearClientSession();
+      renderAuth('', 'login');
+      return;
+    }
+    if (!S.emailVerified) {
+      renderAuth('Please verify your email before entering the lobby.');
+      return;
+    }
+    connect();
+  })();
 
   // ------------------------------------------------------------ rendering
   const avatarColor = (s) => {
@@ -462,6 +617,7 @@
   const avatar = (m) => `<span class="avatar" style="background:${avatarColor(m.name)}">${m.avatar ? esc(m.avatar) : initial(m.name)}</span>`;
 
   function profileHTML() {
+    const userBadge = S.username ? `<div class="profile-user">@${esc(S.username)}</div>` : '';
     const picks = S.avatars
       .map((a) => `<button type="button" class="av-pick ${a === S.avatar ? 'on' : ''}" data-act="avatar" data-a="${esc(a)}" aria-label="Avatar ${esc(a)}" aria-pressed="${a === S.avatar}">${esc(a)}</button>`)
       .join('');
@@ -474,6 +630,7 @@
           <span class="avatar big" style="background:${previewBg}">${S.avatar ? esc(S.avatar) : initialChar}</span>
           <div class="profile-meta">
             <span class="profile-welcome">${myName ? `Playing as <b>${esc(myName)}</b>` : 'Choose your player persona'}</span>
+            ${userBadge}
             <span class="profile-hint">Seen by friends at the table</span>
           </div>
         </div>
@@ -735,7 +892,11 @@
         <section class="panel profile-panel">
           <div class="panel-tag">PLAYER IDENTITY</div>
           ${profileHTML()}
-          <button type="button" class="btn ghost stats-open" data-act="stats">📊 My stats</button>
+          <div class="row" style="margin-top:10px;gap:8px;flex-wrap:wrap">
+            <button type="button" class="btn ghost stats-open" data-act="stats">📊 My stats</button>
+            <button type="button" class="btn ghost small" data-act="logout">Log out</button>
+            <button type="button" class="btn ghost small" data-act="logoutAll">Log out all</button>
+          </div>
         </section>
         <section class="panel join-panel">
           <div class="panel-tag">QUICK ACCESS</div>
@@ -998,6 +1159,8 @@
       store.set('ct_wn', '1');
       render();
     },
+    logout: () => { doLogout(); },
+    logoutAll: () => { doLogoutAll(); },
     copyLink: async () => {
       try {
         await navigator.clipboard.writeText(inviteUrl());

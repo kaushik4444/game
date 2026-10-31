@@ -18,7 +18,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_identities_email_unique ON auth_ident
 
 -- Revocable sessions with expiry (NULL on old rows means legacy/non-expiring).
 ALTER TABLE auth_sessions ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
-CREATE INDEX IF NOT EXISTS idx_auth_sessions_valid ON auth_sessions(token_hash) WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW());
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_valid ON auth_sessions(token_hash) WHERE revoked_at IS NULL;
 
 -- Email verification and password reset, single-use and expiring.
 CREATE TABLE IF NOT EXISTS auth_email_tokens (

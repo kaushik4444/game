@@ -85,8 +85,10 @@ const rejects = (p, re) => assert.rejects(p, (e) => re.test(e.message));
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   let seq = 1;
   const auth = async (srv, name = 'T') => {
-    const email = `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}.${seq++}@test.local`;
-    return registerAndVerify(srv.port, { email, displayName: name, password: 'TestPass123!' });
+    const base = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const email = `${base}.${seq++}@test.local`;
+    const username = `${base.slice(0, 16)}${seq}`;
+    return registerAndVerify(srv.port, { email, username, displayName: name, password: 'TestPass123!' });
   };
 
   await test('a WebSocket from another website (foreign Origin) is refused; the site itself is allowed', async () => {
