@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const WebSocket = require('ws');
 const { prepareDatabase } = require('../db/startup');
+const { registerAndVerify } = require('./helpers/auth');
 const { start } = require('../server');
 
 let passed = 0;
@@ -80,15 +81,21 @@ const rejects = (p, re) => assert.rejects(p, (e) => re.test(e.message));
     ws.on('unexpected-response', (_, res) => { o.error = 'HTTP ' + res.statusCode; resolve(o); });
     ws.on('error', () => resolve(o));
   });
-  const hello = (o, extra = {}) => o.ws.send(JSON.stringify({ t: 'hello', name: 'T', ...extra }));
+  const hello = (o, extra = {}) => o.ws.send(JSON.stringify({ t: 'hello', ...extra }));
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  let seq = 1;
+  const auth = async (srv, name = 'T') => {
+    const email = `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}.${seq++}@test.local`;
+    return registerAndVerify(srv.port, { email, displayName: name, password: 'TestPass123!' });
+  };
 
   await test('a WebSocket from another website (foreign Origin) is refused; the site itself is allowed', async () => {
     const srv = await start(base);
     const evil = await connect(srv, { Origin: 'http://evil.example' });
     assert.match(evil.error || '', /403|401|400/);
+    const session = await auth(srv, 'Origin OK');
     const good = await connect(srv, { Origin: `http://127.0.0.1:${srv.port}` });
-    hello(good); await wait(150);
+    hello(good, { token: session.token }); await wait(150);
     assert.ok(good.msgs.some((m) => m.t === 'welcome'));
     good.ws.close(); await srv.close();
   });
@@ -102,28 +109,38 @@ const rejects = (p, re) => assert.rejects(p, (e) => re.test(e.message));
     a.ws.close(); b.ws.close(); await srv.close();
   });
 
-  await test('new accounts per address are capped, returning players are not affected', async () => {
+  await test('authenticated sessions can connect and invalid/missing tokens are rejected', async () => {
     const srv = await start({ ...base, maxNewAccountsPerIp: 2 });
-    const tokens = [];
-    for (let i = 0; i < 2; i++) { const c = await connect(srv); hello(c); await wait(150); tokens.push(c.msgs.find((m) => m.t === 'welcome').token); c.ws.close(); }
-    const third = await connect(srv); hello(third); await wait(200);
-    assert.equal(third.closed, 1013);
-    assert.ok(third.msgs.some((m) => m.t === 'error'));
-    const back = await connect(srv); hello(back, { token: tokens[0] }); await wait(200);
-    assert.ok(back.msgs.some((m) => m.t === 'welcome'), 'a returning player is still let in');
-    back.ws.close(); await srv.close();
+    const one = await auth(srv, 'Auth One');
+    const two = await auth(srv, 'Auth Two');
+
+    const a = await connect(srv); hello(a, { token: one.token }); await wait(150);
+    const b = await connect(srv); hello(b, { token: two.token }); await wait(150);
+    assert.ok(a.msgs.some((m) => m.t === 'welcome'));
+    assert.ok(b.msgs.some((m) => m.t === 'welcome'));
+
+    const missing = await connect(srv); hello(missing); await wait(150);
+    assert.equal(missing.closed, 1008);
+    assert.ok(missing.msgs.some((m) => m.t === 'authRequired'));
+
+    const bad = await connect(srv); hello(bad, { token: 'bad-token' }); await wait(150);
+    assert.equal(bad.closed, 1008);
+    assert.ok(bad.msgs.some((m) => m.t === 'authRequired'));
+
+    a.ws.close(); b.ws.close(); await srv.close();
   });
 
-  await test('the site-wide account limit stops a flood even from many different addresses', async () => {
+  await test('sessions from many addresses can connect when authenticated', async () => {
     const srv = await start({ ...base, trustProxy: true, maxNewAccountsPerMin: 3, maxNewAccountsPerIp: 1000 });
-    let refused = 0;
+    let welcomed = 0;
     for (let i = 0; i < 5; i++) {
+      const s = await auth(srv, `Flood ${i}`);
       const c = await connect(srv, { 'X-Forwarded-For': `10.0.0.${i}` });
-      hello(c); await wait(120);
-      if (c.closed === 1013) refused++;
+      hello(c, { token: s.token }); await wait(120);
+      if (c.msgs.some((m) => m.t === 'welcome')) welcomed++;
       c.ws.close();
     }
-    assert.equal(refused, 2);
+    assert.equal(welcomed, 5);
     await srv.close();
   });
 

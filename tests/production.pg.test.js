@@ -9,6 +9,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const WebSocket = require('ws');
+const { registerAndVerify } = require('./helpers/auth');
 const testdb = require('./helpers/testdb');
 
 let passed = 0;
@@ -30,7 +31,7 @@ const quiet = () => { const lines = { log: [], warn: [], error: [] }; return { l
 function client(port, name, token) {
   const c = { name, room: null, view: null, chats: [], notices: [], errors: [], stats: null, ws: new WebSocket(`ws://127.0.0.1:${port}/ws`) };
   c.send = (m) => c.ws.send(JSON.stringify(m));
-  c.ws.on('open', () => c.send({ t: 'hello', name, token }));
+  c.ws.on('open', () => c.send({ t: 'hello', token }));
   c.ws.on('message', (raw) => {
     const m = JSON.parse(raw);
     if (m.t === 'welcome') Object.assign(c, { id: m.id, token: m.token });
@@ -61,10 +62,18 @@ function client(port, name, token) {
     const matchesOf = (code) => q('SELECT * FROM matches WHERE room_code = $1 ORDER BY finished_at', [code]);
     const fast = { port: 0, trustProxy: false, botDelay: [0, 3], autoAdvanceMs: 20, trickPauseMs: 0, forcedMs: 0, timeScale: 0.01, absentMs: 60000, maxMsgsPerSec: Infinity, matchRetryDelays: [20, 40, 80] };
 
+    let authSeq = 1;
+    const authClient = async (srv, name) => {
+      const email = `${name.toLowerCase().replace(/[^a-z0-9]/g, '')}.${authSeq++}@test.local`;
+      const { token } = await registerAndVerify(srv.port, { email, displayName: name, password: 'TestPass123!' });
+      const c = client(srv.port, name, token);
+      await c.ready();
+      return c;
+    };
+
     /** A short Wizard game: one human (idle, so the server's turn limit plays for them) and two bots, played to the end. */
     async function playGame(srv, name = 'Hana', extra = {}) {
-      const c = client(srv.port, name);
-      await c.ready();
+      const c = await authClient(srv, name);
       c.send({ t: 'create', gameId: 'wizard' });
       await until(() => c.room, 'table');
       c.send({ t: 'setSeats', seats: 3 });
@@ -132,8 +141,7 @@ function client(port, name, token) {
     console.log('players who leave');
     await test('a player who leaves early is stored as such and does not get the game in their stats; the one who stayed does', async () => {
       srv = await start({ ...fast, matchLog: quiet() });
-      const a = client(srv.port, 'Stayer'); const b = client(srv.port, 'Quitter');
-      await a.ready(); await b.ready();
+      const a = await authClient(srv, 'Stayer'); const b = await authClient(srv, 'Quitter');
       a.send({ t: 'create', gameId: 'wizard' });
       await until(() => a.room, 'table');
       a.send({ t: 'setSeats', seats: 3 });
@@ -148,7 +156,7 @@ function client(port, name, token) {
       const ps = await q('SELECT * FROM match_participants WHERE match_id = $1 ORDER BY seat', [m.id]);
       assert.deepEqual(ps.map((p) => [p.left_early, p.is_bot]), [[false, false], [true, false], [false, true]]);
       assert.equal((await a.getStats()).played, 1);
-      b.send({ t: 'hello', name: 'Quitter', token: b.token });
+      b.send({ t: 'hello', token: b.token });
       assert.equal((await b.getStats()).played, 0, 'leaving a game early is not a loss');
       a.ws.close(); b.ws.close();
       await srv.close();

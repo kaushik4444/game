@@ -935,40 +935,12 @@ function start(opts = {}) {
   async function handleHello(ws, msg) {
     if (ws.readyState !== 1) return; // the socket closed while waiting in the queue
 
-    const testLegacyGuest = env.NODE_ENV === 'test';
     if (!msg || typeof msg.token !== 'string' || !msg.token) {
-      if (!testLegacyGuest) {
-        send(ws, { t: 'authRequired', message: 'Please log in to play.' });
-        return ws.close(1008, 'auth required');
-      }
-      // Test harness compatibility: existing websocket tests create ephemeral players directly.
-      // Production and development still require authenticated sessions.
-      if (!allowNewAccount(ws.ip)) {
-        send(ws, { t: 'error', message: 'Too many new players right now, please try again in a few minutes' });
-        return ws.close(1013, 'busy');
-      }
-      const created = await dbPlayers.createAnonymousPlayer({
-        displayName: cleanName(msg.name) || 'Guest ' + (100 + crypto.randomInt(900)),
-        avatar: AVATARS.includes(msg.avatar) ? msg.avatar : pick(AVATARS),
-      });
-      const guest = {
-        id: created.player.id,
-        token: created.rawToken,
-        name: created.player.display_name,
-        avatar: created.player.avatar,
-        createdAt: created.player.created_at,
-        room: null,
-        ws: null,
-        connected: false,
-        lastSeen: Date.now(),
-      };
-      players.set(guest.id, guest);
-      tokens.set(guest.token, guest);
-      msg = { ...msg, token: guest.token };
+      send(ws, { t: 'authRequired', message: 'Please log in to play.' });
+      return ws.close(1008, 'auth required');
     }
 
     let p = tokens.get(msg.token) || null;
-
     if (!p) {
       const dbPlayer = await dbPlayers.authenticateToken(msg.token);
       if (dbPlayer) {
