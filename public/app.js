@@ -139,12 +139,12 @@
       const r = await fetch('/api/auth/session', { credentials: 'same-origin' });
       const out = await r.json();
       if (out && out.csrfToken) S.csrf = out.csrfToken;
+      if (out && out.ok) S.requireEmailVerification = policyRequiresVerification(out); // secure default stays true when field is missing/invalid
       if (!out || !out.ok || !out.authenticated) return false;
       S.name = out.player && out.player.display_name ? out.player.display_name : S.name;
       S.username = out.player && out.player.username ? out.player.username : S.username;
       S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
       S.emailVerified = !!out.emailVerified;
-      S.requireEmailVerification = policyRequiresVerification(out);
       S.named = !!S.name;
       if (S.name) store.set('ct_name', S.name);
       if (S.username) store.set('ct_username', S.username);
@@ -218,7 +218,7 @@
     S.auth = tab;
     closeOverlay();
     const loginOn = tab === 'login';
-    const canResend = S.requireEmailVerification;
+    const resend = S.requireEmailVerification ? '<button class="btn ghost small" data-act="resendVerification">Resend verification email</button>' : '';
     const overlay = document.createElement('div');
     overlay.id = 'auth-overlay';
     overlay.className = 'overlay';
@@ -235,7 +235,7 @@
           <input id="loginPassword" type="password" required minlength="8" placeholder="Password" autocomplete="current-password">
           <button class="btn big" type="submit">Log in</button>
         </form>
-        <div class="row auth-links"><button class="btn ghost small" data-act="forgotPassword">Forgot password?</button><button class="btn ghost small ${canResend ? '' : 'subtle'}" data-act="resendVerification">Resend verification email</button></div>
+        <div class="row auth-links"><button class="btn ghost small" data-act="forgotPassword">Forgot password?</button>${resend}</div>
       ` : `
         <form id="registerForm" class="auth-form">
           <input id="registerName" type="text" maxlength="20" required placeholder="Display name" autocomplete="nickname">

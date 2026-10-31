@@ -295,7 +295,6 @@ input[type=text]:focus-visible, input[type=email]:focus-visible, input[type=pass
 .auth-form { display: grid; gap: 10px; margin-top: 8px; }
 .auth-links { margin-top: 10px; justify-content: space-between; }
 .auth-links .btn { font-size: 12.5px; }
-.auth-links .btn.subtle { opacity: .7; }
 .auth-policy-hint { margin: -1px 0 2px; padding: 8px 10px; border-radius: 10px; border: 1px dashed rgba(255, 255, 255, .2); color: var(--muted); font-size: 12px; line-height: 1.4; }
 .auth-policy-hint.optional { border-color: rgba(127, 240, 218, .45); color: #aef7ea; background: rgba(127, 240, 218, .08); }
 .auth-msg { margin: 12px 0 0; padding: 10px 12px; border-radius: 12px; background: rgba(255, 201, 77, .1); border: 1px solid rgba(255, 201, 77, .35); color: var(--gold); font-size: 13.5px; line-height: 1.45; }

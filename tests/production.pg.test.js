@@ -265,6 +265,12 @@ function cookieSocket(port, cookie) {
       const mail = { sent: [], failNext: 0, assertReady() {}, async sendVerification(m) { if (this.failNext-- > 0) throw new Error('provider down'); this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset(m) { if (this.failNext-- > 0) throw new Error('provider down'); this.sent.push({ kind: 'reset', ...m }); } };
       const optional = await start({ ...fast, matchLog: quiet(), log: quiet(), emailSender: mail, env: { ...process.env, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'false' } });
       try {
+        const guest = new Browser(optional.port);
+        const guestSession = await guest.get('/api/auth/session');
+        assert.equal(guestSession.status, 200);
+        assert.equal(guestSession.json.authenticated, false);
+        assert.equal(guestSession.json.emailVerificationRequired, false, 'unauthenticated session payload still exposes policy for first-render auth messaging');
+
         const b = new Browser(optional.port); await b.csrf();
         const email = `optional.${authSeq++}@test.local`;
         mail.failNext = 1;
