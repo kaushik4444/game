@@ -263,7 +263,11 @@ function cookieSocket(port, cookie) {
     });
     await test('when verification is optional, registration/login can proceed without verification and without fake verified status', async () => {
       const mail = { sent: [], failNext: 0, assertReady() {}, async sendVerification(m) { if (this.failNext-- > 0) throw new Error('provider down'); this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset(m) { if (this.failNext-- > 0) throw new Error('provider down'); this.sent.push({ kind: 'reset', ...m }); } };
-      const optional = await start({ ...fast, matchLog: quiet(), log: quiet(), emailSender: mail, env: { ...process.env, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'false' } });
+      const testRateLimits = {
+        RL_REGISTER_IP_LIMIT: '100',
+        RL_REGISTER_EMAIL_LIMIT: '100',
+      };
+      const optional = await start({ ...fast, matchLog: quiet(), log: quiet(), emailSender: mail, env: { ...process.env, ...testRateLimits, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'false' } });
       try {
         const guest = new Browser(optional.port);
         const guestSession = await guest.get('/api/auth/session');
