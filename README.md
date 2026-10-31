@@ -126,6 +126,10 @@ Required auth env vars for deployment:
 
 Do not use production Neon credentials for local or CI tests; keep `TEST_DATABASE_URL` pointed at a disposable local/dev PostgreSQL server.
 
+## Removing all user data (Stage 7)
+
+`scripts/cleanup-user-data.js` empties every user and gameplay table while keeping the schema and the migration history. It is a dry run by default and refuses to delete without `--execute --confirm=<database name>`. Plan, order, commands and verification: [docs/DATA_CLEANUP.md](docs/DATA_CLEANUP.md).
+
 ## Notes
 
 The game registry currently exposes Wizard, 29, Poker, and The Mind. Saboteur, 6 nimmt!, and UNO are announced as roadmap games only until their full engines and clients are implemented.
