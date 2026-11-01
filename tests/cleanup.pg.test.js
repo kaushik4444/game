@@ -67,9 +67,9 @@ function cookieSocket(port, cookie) {
         const m = (await q("INSERT INTO matches (room_code, game_id, seats, match_key) VALUES ($1,$2,3, gen_random_uuid()) RETURNING id", ['ROOM' + key, game]))[0].id;
         await q("INSERT INTO match_participants (match_id, player_id, player_name, seat, score, is_winner, is_bot, left_early) VALUES ($1,$2,'Ada',0,50,TRUE,FALSE,FALSE), ($1,$3,'Guest1',1,20,FALSE,FALSE,TRUE), ($1,NULL,'Bot',2,10,FALSE,TRUE,FALSE), ($1,NULL,'Visitor',3,5,FALSE,FALSE,FALSE)", [m, reg[0], anon[0]]);
       }
-      return { players: 5, auth_identities: 2, auth_sessions: 4, auth_email_tokens: 2, auth_rate_limits: 3, matches: 3, match_participants: 12 };
+      return { players: 5, auth_identities: 2, auth_sessions: 4, auth_email_tokens: 2, auth_rate_limits: 3, matches: 3, match_participants: 12, player_recent_tables: 0 };
     }
-    const SEEDED = { match_participants: 12, matches: 3, auth_email_tokens: 2, auth_sessions: 4, auth_identities: 2, auth_rate_limits: 3, players: 5 };
+    const SEEDED = { match_participants: 12, matches: 3, auth_email_tokens: 2, auth_sessions: 4, auth_identities: 2, player_recent_tables: 0, auth_rate_limits: 3, players: 5 };
 
     /** The same database through the command line. NODE_PATH is passed on so a locally borrowed driver still resolves. */
     const cli = (args, url = t.url) => spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'cleanup-user-data.js'), ...args], { env: { PATH: process.env.PATH, NODE_PATH: process.env.NODE_PATH || '', CLEANUP_DATABASE_URL: url }, encoding: 'utf8', timeout: 60000 });
@@ -107,7 +107,7 @@ function cookieSocket(port, cookie) {
       assert.deepEqual(writes, [], 'no write statement of any kind: ' + writes.join(' | '));
       const text = cleanup.formatReport(report);
       assert.match(text, /DRY RUN \(read-only; nothing will be changed\)/);
-      assert.match(text, /would delete 31 rows from 7 tables\. Nothing was changed/);
+      assert.match(text, /would delete 31 rows from 8 tables\. Nothing was changed/);
       assert.match(text, /3 legacy anonymous/);
       assert.ok(!text.includes('ada@example.com') && text.includes('a***@example.com'), 'emails are masked');
       assert.ok(!/a{64}|c{64}|e{64}/.test(text + JSON.stringify(report)), 'token hashes are never shown');
@@ -223,7 +223,7 @@ function cookieSocket(port, cookie) {
 
       const after = await dump();
       assert.deepEqual(after.schema_migrations, before.schema_migrations, 'migration history is byte-identical');
-      assert.equal(after.schema_migrations.n, 4);
+      assert.equal(after.schema_migrations.n, 5);
       const fingerprintAfter = await cleanup.fingerprint(x);
       assert.equal(fingerprintAfter.structureDigest, fingerprintBefore.structureDigest, 'tables, columns, indexes, constraints unchanged');
       assert.equal(fingerprintAfter.migrationsDigest, fingerprintBefore.migrationsDigest);
@@ -254,12 +254,12 @@ function cookieSocket(port, cookie) {
       const snap = path.join(snapDir, 'pre.json');
       const dry = cli(['--snapshot=' + snap, '--sample=2']);
       assert.equal(dry.status, 0, dry.stdout + dry.stderr);
-      assert.match(dry.stdout, /would delete \d+ rows from 7 tables/);
+      assert.match(dry.stdout, /would delete \d+ rows from 8 tables/);
       const saved = JSON.parse(fs.readFileSync(snap, 'utf8'));
       assert.ok(saved.fingerprint.structureDigest && !JSON.stringify(saved).includes('ada@example.com'), 'the snapshot holds structure and counts, no user data');
       const run = cli(['--execute', `--confirm=${t.name}`, '--snapshot=' + snap]);
       assert.equal(run.status, 0, run.stdout + run.stderr);
-      assert.match(run.stdout, /COMMITTED\. Deleted \d+ rows from 7 tables/);
+      assert.match(run.stdout, /COMMITTED\. Deleted \d+ rows from 8 tables/);
       for (const tbl of cleanup.CLEAN_TABLES) assert.equal(await rows(tbl), 0);
       const ver = cli(['--verify', '--snapshot=' + snap]);
       assert.equal(ver.status, 0, ver.stdout + ver.stderr);

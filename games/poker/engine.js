@@ -445,7 +445,7 @@ function applyAction(g, playerId, action) {
       }
       g.currentBet = p.bet;
       p.last = p.allIn ? `All-in ${p.bet}` : opening ? `Bet ${p.bet}` : `Raise to ${p.bet}`;
-      g.log.push({ by: p.name, card: p.last, kind: 'bet' });
+      g.log.push({ by: p.name, card: p.allIn ? `goes all-in with ${p.bet}` : opening ? `bets ${p.bet}` : `raises to ${p.bet}`, kind: 'bet' });
       break;
     }
     default:

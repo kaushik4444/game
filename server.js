@@ -14,6 +14,9 @@ const dbMatches = require('./db/matches');
 const { createMatchQueue, defaultSpoolDir } = require('./db/matchQueue');
 const { makeAuthEmailSender } = require('./lib/email');
 const { createAuthRoutes } = require('./lib/authRoutes');
+const dbAccount = require('./db/account');
+const { DELETED_NAME } = dbAccount;
+const { scrubText } = require('./games/scrub');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = {
@@ -118,6 +121,7 @@ function start(opts = {}) {
 
   const sendJson = (res, status, body) => {
     setCommonHeaders(res);
+    res.setHeader('Cache-Control', 'no-store'); // API answers can be personal: never cached by a browser or proxy
     res.writeHead(status);
     res.end(JSON.stringify(body));
   };
@@ -133,9 +137,57 @@ function start(opts = {}) {
     readJsonBody,
     log: opts.log || console,
     // a signed-out or reset account must not keep playing on an already open socket
+    // Is this table code still open on this server? ('lobby' | 'playing' | null). Used to drop stale recent tables.
+    tableStatus: (code) => { const r = rooms.get(code); return r ? r.status : null; },
     onSignedOut: ({ playerId, token }) => {
       const p = players.get(playerId);
       if (p && p.ws && (!token || p.token === token)) p.ws.close(4001, 'signed out');
+    },
+    // the display name was changed over HTTP (profile page): same effect as the lobby's own rename
+    onProfileChanged: ({ playerId, displayName }) => {
+      const p = players.get(playerId);
+      if (!p) return;
+      p.name = displayName;
+      const room = rooms.get(p.room);
+      if (!room) return;
+      const m = room.members.find((x) => x.id === p.id);
+      if (m && room.status !== 'playing') m.name = p.name; // a running game keeps the names it started with
+      const s = room.spectators.find((x) => x.id === p.id);
+      if (s) s.name = p.name;
+      broadcast(room);
+    },
+    // the account no longer exists: leave the table, close the socket, forget the player on this server
+    onAccountDeleted: ({ playerId }) => {
+      const p = players.get(playerId);
+      if (!p) return;
+      // The real name must not outlive the account anywhere: not in the table, its log or chat, and not in the match
+      // record when the game finishes. Rename the seat everywhere first, then let the player leave (a bot keeps it).
+      // Every name this person went by at a table: the lobby name, the name a running game started with, a stale copy.
+      const oldNames = new Set([p.name]);
+      for (const room of rooms.values()) {
+        for (const m of [...room.members, ...room.spectators]) if (m.id === playerId) oldNames.add(m.name);
+      }
+      oldNames.delete(DELETED_NAME);
+      p.name = DELETED_NAME;
+      for (const room of rooms.values()) {
+        const seated = [...room.members, ...room.spectators].filter((m) => m.id === playerId);
+        if (!seated.length && p.room !== room.code) continue;
+        for (const m of seated) { m.name = DELETED_NAME; m.avatar = '🧙'; }
+        // the game's own copy: players, every log line, trick records (the plugin owns its state)
+        if (room.game && typeof room.game.scrub === 'function') room.game.scrub([...oldNames], DELETED_NAME);
+        // chat: their messages, and every system line or message that mentions the name in plain text
+        for (const c of room.chat || []) {
+          if (c.id === playerId) { c.name = DELETED_NAME; c.avatar = '🧙'; }
+          if (typeof c.text === 'string') c.text = scrubText(c.text, [...oldNames], DELETED_NAME);
+        }
+      }
+      try { if (p.room) leaveRoom(p); } catch { /* the player is going away either way */ }
+      if (p.ws) p.ws.close(4001, 'account deleted');
+      // another device that signed in separately has its own socket (and its own player object): close those too
+      for (const ws of wss.clients) if (ws.player && ws.player.id === playerId) ws.close(4001, 'account deleted');
+      for (const [tok, q] of tokens) if (q.id === playerId) tokens.delete(tok);
+      clearTimeout(p.dropTimer);
+      players.delete(playerId);
     },
   });
 
@@ -144,6 +196,10 @@ function start(opts = {}) {
     try {
       rel = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     } catch {
+      // a malformed %-escape: an unknown player page is a plain 404 (as for any other name that does not exist); anything else is a bad request
+      let raw = '';
+      try { raw = new URL(req.url, 'http://x').pathname; } catch { /* keep empty */ }
+      if (raw.startsWith('/api/players/')) return sendJson(res, 404, { ok: false, error: 'No such player.' });
       res.writeHead(400);
       return res.end();
     }
@@ -512,6 +568,14 @@ function start(opts = {}) {
       broadcast(room);
     }, dropGraceMs);
     if (p.dropTimer.unref) p.dropTimer.unref();
+  }
+
+  // Tables a player sits at or watches are remembered on their account (shown as "Recent tables" on any device).
+  const RECENT_ON = new Set(['create', 'join', 'sit']);
+  function trackRecent(p) {
+    const room = rooms.get(p.room);
+    if (!room) return;
+    dbAccount.rememberTable(p.id, { code: room.code, gameId: room.gameId }).catch((e) => console.error('[server] recent table not saved:', e.message));
   }
 
   function addMember(room, p) {
@@ -946,7 +1010,10 @@ function start(opts = {}) {
       const p = ws.player;
       if (!p || !Object.hasOwn(handlers, msg.t)) return;
       try {
+        const before = p.room;
         handlers[msg.t](p, msg);
+        // remember a table only when this message really put the player at it (a refused join leaves p.room alone)
+        if (RECENT_ON.has(msg.t) && p.room && (p.room !== before || (msg.t === 'join' && String(msg.code || '').trim().toUpperCase() === p.room))) trackRecent(p);
       } catch (e) {
         console.error('handler error', msg.t, e);
         sendError(p, 'Something went wrong');

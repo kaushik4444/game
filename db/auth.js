@@ -402,6 +402,7 @@ async function purgeExpired() {
 }
 
 module.exports = {
+  verifyPassword,
   AuthError,
   normEmail,
   sessionTtlDays,

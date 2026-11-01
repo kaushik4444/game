@@ -30,6 +30,7 @@ const PLAN = [
   { table: 'auth_email_tokens', stores: 'Hashed single-use email verification and password-reset tokens with the address they were sent to', references: ['players'] },
   { table: 'auth_sessions', stores: 'Hashed session tokens (registered and legacy anonymous), expiry and revocation', references: ['players'] },
   { table: 'auth_identities', stores: 'Login methods: email address, Argon2 password hash, verification time', references: ['players'] },
+  { table: 'player_recent_tables', stores: 'Recently visited table codes per account', references: ['players'] },
   { table: 'auth_rate_limits', stores: 'Hashed per-address / per-email rate-limit counters', references: [] },
   { table: 'players', stores: 'Accounts: registered players and legacy anonymous players (username, display name, avatar, timestamps)', references: [] },
 ];
@@ -44,6 +45,7 @@ const EXPECTED_FKS = [
   { child: 'auth_email_tokens', parent: 'players', onDelete: 'CASCADE' },
   { child: 'auth_identities', parent: 'players', onDelete: 'CASCADE' },
   { child: 'auth_sessions', parent: 'players', onDelete: 'CASCADE' },
+  { child: 'player_recent_tables', parent: 'players', onDelete: 'CASCADE' },
   { child: 'match_participants', parent: 'matches', onDelete: 'CASCADE' },
   { child: 'match_participants', parent: 'players', onDelete: 'SET NULL' },
 ];
@@ -212,6 +214,7 @@ const SAMPLE_SQL = {
   auth_rate_limits: 'SELECT scope, left(key, 8) AS key_prefix, count, window_start FROM public."auth_rate_limits" ORDER BY window_start LIMIT $1',
   matches: 'SELECT id, game_id, room_code, seats, finished_at FROM public."matches" ORDER BY finished_at LIMIT $1',
   match_participants: 'SELECT match_id, player_name, seat, score, is_winner, is_bot, left_early, (player_id IS NOT NULL) AS has_account FROM public."match_participants" ORDER BY match_id, seat LIMIT $1',
+  player_recent_tables: 'SELECT player_id, room_code, game_id, last_seen_at FROM public."player_recent_tables" ORDER BY last_seen_at DESC LIMIT $1',
 };
 
 async function samples(client, n) {

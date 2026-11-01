@@ -9,6 +9,7 @@
  */
 
 const SUITS = ['S', 'H', 'D', 'C']; // spades, hearts, diamonds, clubs
+const SUIT_NAMES = { S: 'spades', H: 'hearts', D: 'diamonds', C: 'clubs' };
 const RANKS = ['7', '8', 'Q', 'K', '10', 'A', '9', 'J']; // low -> high
 const POINTS = { J: 3, 9: 2, A: 1, 10: 1, K: 0, Q: 0, 8: 0, 7: 0 };
 const MIN_BID = 15;
@@ -191,7 +192,7 @@ function applyAction(g, playerId, action) {
       if (!legalCards(g, seat).includes(hand[ci])) return fail(g.revealer === seat ? 'You must play a trump card' : 'You must follow suit');
       const [card] = hand.splice(ci, 1);
       g.trick.push({ player: seat, card, trump: g.trumpRevealed && card.suit === g.trumpSuit });
-      g.log.push({ by: g.players[seat].name, card: card.suit + card.rank, kind: 'play' });
+      g.log.push({ by: g.players[seat].name, card: `plays ${card.rank} of ${SUIT_NAMES[card.suit]}`, kind: 'play' });
       g.revealer = -1;
       if (g.trick.length < 4) {
         g.turn = (g.turn + 1) % 4;
