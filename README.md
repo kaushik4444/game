@@ -31,9 +31,20 @@ Tableverse is currently open for friend testing.
 
 - Public home page + live table directory.
 - Auth sheet that resumes the action a visitor originally tapped after login.
-- Account menu (Profile, Stats, Settings, What’s New, logout controls).
+- Account menu (Profile, Settings, What’s New, logout controls) and a profile page (`#profile`; public pages at `#u/<username>`).
 - Real-time chat, spectators, reconnect/rejoin, activity log.
 - Cookie-based auth (`HttpOnly` session cookie), CSRF double-submit protection, rate limits.
+
+## What's new in v0.6 — profiles, history, account deletion
+
+- **Profiles.** Own profile (username, display name, join date, stats, history, account tab) and a public page per username showing only username, display name, avatar, join date, games played, wins and win rate. Display names are validated server-side (2–20 characters, control characters and `<>` removed).
+- **History and stats.** Paginated finished-match history (10 per page, newest first). Statistics are aggregated in SQL (no row cap); only human, finished, non-early-leave games with a match key are counted, each match once.
+- **Delete Account.** Password re-authentication, then one transaction: sessions, credentials, tokens and recent tables are removed; match rows are kept with the seat renamed to `Deleted player` and `player_id` unlinked. A game still in progress shows the seat as `Deleted player` and is recorded that way when it ends.
+- **Recent tables** are per account (table `player_recent_tables`, migration 005) and sync across devices. Closed tables are dropped on read. The old browser-only `ct_recent` key is removed.
+- **Game logs** show who acted (shared client formatter); Poker and 29 log wording was clarified.
+- **Home page** reduced to join/create, rejoin, recent and open tables.
+
+New endpoints: `GET /api/me/profile`, `POST /api/me/display-name`, `GET /api/me/history?page=`, `GET /api/me/recent`, `POST /api/me/recent/clear`, `POST /api/me/delete-account`, `GET /api/players/:username` (public).
 
 ## Roadmap (planned, not shipped yet)
 
@@ -89,7 +100,7 @@ npm test
 
 ## PostgreSQL tests
 
-`tests/db.pg.test.js`, `tests/production.pg.test.js`, `tests/cleanup.pg.test.js` require a disposable local PostgreSQL instance:
+`tests/db.pg.test.js`, `tests/production.pg.test.js`, `tests/cleanup.pg.test.js`, `tests/account.pg.test.js` require a disposable local PostgreSQL instance:
 
 ```bash
 TEST_DATABASE_URL=postgres://postgres:secret@127.0.0.1:5432/postgres npm run test:pg

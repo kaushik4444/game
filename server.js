@@ -15,6 +15,7 @@ const { createMatchQueue, defaultSpoolDir } = require('./db/matchQueue');
 const { makeAuthEmailSender } = require('./lib/email');
 const { createAuthRoutes } = require('./lib/authRoutes');
 const dbAccount = require('./db/account');
+const { DELETED_NAME } = dbAccount;
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = {
@@ -135,6 +136,8 @@ function start(opts = {}) {
     readJsonBody,
     log: opts.log || console,
     // a signed-out or reset account must not keep playing on an already open socket
+    // Is this table code still open on this server? ('lobby' | 'playing' | null). Used to drop stale recent tables.
+    tableStatus: (code) => { const r = rooms.get(code); return r ? r.status : null; },
     onSignedOut: ({ playerId, token }) => {
       const p = players.get(playerId);
       if (p && p.ws && (!token || p.token === token)) p.ws.close(4001, 'signed out');
@@ -156,6 +159,14 @@ function start(opts = {}) {
     onAccountDeleted: ({ playerId }) => {
       const p = players.get(playerId);
       if (!p) return;
+      // The real name must not outlive the account anywhere: not in the table, its log or chat, and not in the match
+      // record when the game finishes. Rename the seat everywhere first, then let the player leave (a bot keeps it).
+      p.name = DELETED_NAME;
+      for (const room of rooms.values()) {
+        for (const m of [...room.members, ...room.spectators]) if (m.id === playerId) { m.name = DELETED_NAME; m.avatar = '🧙'; }
+        for (const gp of (room.game && room.game.players) || []) if (gp && gp.id === playerId) gp.name = DELETED_NAME;
+        for (const c of room.chat || []) if (c.id === playerId) { c.name = DELETED_NAME; c.avatar = '🧙'; }
+      }
       try { if (p.room) leaveRoom(p); } catch { /* the player is going away either way */ }
       if (p.ws) p.ws.close(4001, 'account deleted');
       clearTimeout(p.dropTimer);
@@ -978,8 +989,10 @@ function start(opts = {}) {
       const p = ws.player;
       if (!p || !Object.hasOwn(handlers, msg.t)) return;
       try {
+        const before = p.room;
         handlers[msg.t](p, msg);
-        if (RECENT_ON.has(msg.t) && p.room) trackRecent(p);
+        // remember a table only when this message really put the player at it (a refused join leaves p.room alone)
+        if (RECENT_ON.has(msg.t) && p.room && (p.room !== before || (msg.t === 'join' && String(msg.code || '').trim().toUpperCase() === p.room))) trackRecent(p);
       } catch (e) {
         console.error('handler error', msg.t, e);
         sendError(p, 'Something went wrong');

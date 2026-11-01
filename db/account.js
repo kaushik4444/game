@@ -11,7 +11,7 @@ const { isUuid, getPlayerProfile } = require('./matches');
 const { AuthError } = dbAuth;
 const RECENT_LIMIT = 6;
 const HISTORY_PAGE_SIZE = 10;
-const DELETED_NAME = 'Deleted player';
+const { DELETED_NAME } = require('./matches');
 
 /** The same rules the lobby uses for a name: printable, no angle brackets, 2-20 characters. */
 function cleanDisplayName(input) {
@@ -114,6 +114,15 @@ async function listRecentTables(playerId) {
   return r.rows.map((x) => ({ code: x.room_code, gameId: x.game_id, at: iso(x.last_seen_at) }));
 }
 
+async function forgetRecentTables(playerId, codes) {
+  if (!codes.length) return;
+  if (!db.hasDatabase() || !isUuid(playerId)) {
+    memoryRecent.set(playerId, (memoryRecent.get(playerId) || []).filter((x) => !codes.includes(x.code)));
+    return;
+  }
+  await db.query('DELETE FROM player_recent_tables WHERE player_id = $1 AND room_code = ANY($2::text[])', [playerId, codes]);
+}
+
 async function clearRecentTables(playerId) {
   memoryRecent.delete(playerId);
   if (db.hasDatabase() && isUuid(playerId)) await db.query('DELETE FROM player_recent_tables WHERE player_id = $1', [playerId]);
@@ -145,4 +154,4 @@ async function deleteAccount(playerId, password) {
   });
 }
 
-module.exports = { DELETED_NAME, RECENT_LIMIT, HISTORY_PAGE_SIZE, cleanDisplayName, getOwnProfile, updateDisplayName, getHistory, getPublicProfile, rememberTable, listRecentTables, clearRecentTables, deleteAccount };
+module.exports = { DELETED_NAME, RECENT_LIMIT, HISTORY_PAGE_SIZE, cleanDisplayName, getOwnProfile, updateDisplayName, getHistory, getPublicProfile, rememberTable, listRecentTables, forgetRecentTables, clearRecentTables, deleteAccount };

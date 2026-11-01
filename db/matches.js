@@ -2,6 +2,9 @@
 const db = require('./pool');
 const { computeProfile } = require('./stats');
 
+/** What a seat is called once its account no longer exists (see db/account.js deleteAccount). */
+const DELETED_NAME = 'Deleted player';
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isUuid = (v) => typeof v === 'string' && UUID_RE.test(v);
 
@@ -79,15 +82,22 @@ async function recordMatch({ matchKey, roomCode, gameId, seats, options, started
     const matchId = matchRes.rows[0].id;
 
     for (const p of participants) {
+      // The player is looked up, not trusted. FOR SHARE keeps a concurrent account deletion waiting until this match is
+      // committed (the deletion then anonymises this row too); if the account is already gone the seat is stored
+      // WITHOUT the account and WITHOUT the real name, so a game that finishes after the account was deleted can never
+      // bring the name back. Bots have no account and keep their name.
+      let accountId = null;
+      if (isUuid(p.playerId)) {
+        accountId = (await client.query('SELECT id FROM players WHERE id = $1 FOR SHARE', [p.playerId])).rows[0]?.id || null;
+      }
+      const gone = isUuid(p.playerId) && !accountId && !p.isBot;
       await client.query(
-        // The player is looked up, not trusted: an id with no account row (a wiped database, a deleted player) must not
-        // make the foreign key reject the whole match. Such a participant is stored without an account.
         `INSERT INTO match_participants (match_id, player_id, player_name, seat, score, is_winner, is_bot, left_early)
-         VALUES ($1, (SELECT id FROM players WHERE id = $2::uuid), $3, $4, $5, $6, $7, $8)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           matchId,
-          isUuid(p.playerId) ? p.playerId : null, // bots and synthetic ids have no account
-          String(p.name || 'Player').slice(0, 32),
+          accountId,
+          gone ? DELETED_NAME : String(p.name || 'Player').slice(0, 32),
           p.seat ?? 0,
           p.score ?? 0,
           Boolean(p.isWinner),
@@ -135,21 +145,44 @@ async function getPlayerProfile(playerId, { memberSince = null } = {}) {
   } else if (!isUuid(playerId)) {
     rows = [];
   } else {
-    const res = await db.query(
-      `SELECT m.game_id, m.finished_at, m.options, m.seats, mp.is_winner, mp.score
-       FROM match_participants mp
-       JOIN matches m ON m.id = mp.match_id
-       WHERE mp.player_id = $1 AND mp.left_early = FALSE AND mp.is_bot = FALSE AND m.match_key IS NOT NULL
-       ORDER BY m.finished_at DESC
-       LIMIT 5000`,
-      [playerId]
-    );
-    rows = res.rows.map((r) => ({ gameId: r.game_id, finishedAt: r.finished_at, isWinner: r.is_winner, score: r.score, options: r.options || {}, seats: r.seats }));
+    return pgProfile(playerId, memberSince);
   }
   return computeProfile(rows, { memberSince, metrics: gameStats });
 }
 
+/**
+ * Lifetime profile from SQL aggregates, so it is exact for any number of games (no row cap). Rows are counted once per
+ * match (DISTINCT ON), and bots, early leavers and records without a result are left out, exactly like the history list.
+ */
+async function pgProfile(playerId, memberSince) {
+  const base = `WITH mine AS (
+      SELECT DISTINCT ON (m.id) m.id, m.game_id, m.finished_at, m.options, m.seats, mp.is_winner, mp.score
+      FROM match_participants mp JOIN matches m ON m.id = mp.match_id
+      WHERE mp.player_id = $1 AND mp.left_early = FALSE AND mp.is_bot = FALSE AND m.match_key IS NOT NULL
+      ORDER BY m.id, mp.seat)`;
+  const [grouped, recent, streaks] = await Promise.all([
+    db.query(`${base} SELECT game_id, options, seats, is_winner, score, COUNT(*)::int AS n FROM mine GROUP BY game_id, options, seats, is_winner, score`, [playerId]),
+    db.query(`${base} SELECT game_id, finished_at, is_winner, score FROM mine ORDER BY finished_at DESC, id LIMIT 10`, [playerId]),
+    db.query(`${base}, seq AS (
+        SELECT is_winner, ROW_NUMBER() OVER (ORDER BY finished_at DESC, id) AS rn,
+               ROW_NUMBER() OVER (PARTITION BY is_winner ORDER BY finished_at DESC, id) AS rk FROM mine)
+      SELECT COALESCE((SELECT MIN(rn) - 1 FROM seq WHERE NOT is_winner), (SELECT COUNT(*) FROM seq), 0)::int AS current,
+             COALESCE((SELECT MAX(c) FROM (SELECT COUNT(*) AS c FROM seq WHERE is_winner GROUP BY rn - rk) x), 0)::int AS best,
+             (SELECT MAX(finished_at) FROM mine) AS last_played`, [playerId]),
+  ]);
+  const rows = grouped.rows.map((r) => ({ gameId: r.game_id, isWinner: r.is_winner, score: r.score, options: r.options || {}, seats: r.seats, n: r.n }));
+  const s = streaks.rows[0] || { current: 0, best: 0, last_played: null };
+  return computeProfile(rows, {
+    memberSince,
+    metrics: gameStats,
+    streak: { current: s.current, best: s.best },
+    lastPlayed: s.last_played,
+    recent: recent.rows.map((r) => ({ gameId: r.game_id, finishedAt: r.finished_at, isWinner: r.is_winner, score: r.score })),
+  });
+}
+
 module.exports = {
+  DELETED_NAME,
   isUuid,
   recordMatch,
   getPlayerProfile,

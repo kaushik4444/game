@@ -413,7 +413,7 @@
       const r = await fetch('/api/me/recent', { credentials: 'same-origin' });
       const out = await r.json();
       if (!r.ok || !out.ok) return;
-      S.recentTables = (out.tables || []).map((t) => ({ code: t.code, gameId: t.gameId, name: (gameMeta(t.gameId) || {}).name || t.gameId }));
+      S.recentTables = (out.tables || []).map((t) => ({ code: t.code, gameId: t.gameId, status: t.status, name: (gameMeta(t.gameId) || {}).name || t.gameId }));
       if (!S.room) render();
     } catch { /* offline: the list simply stays as it was */ }
   }
@@ -421,9 +421,8 @@
   function recentTablesHTML() {
     if (!S.recentTables.length) return '';
     const rows = S.recentTables.map((r) => {
-      const live = S.publicTables.find((t) => t.code === r.code);
       const mine = S.rejoin.some((x) => x.code === r.code);
-      const status = mine ? 'Your seat is waiting' : live ? (live.status === 'playing' ? 'In progress' : 'Available') : 'Private or expired';
+      const status = mine ? 'Your seat is waiting' : r.status === 'playing' ? 'In progress' : 'Open';
       return `<button class="recent-table ${mine ? 'mine' : ''}" data-act="rejoin" data-code="${esc(r.code)}"><span>↺</span><b>${esc(r.name)}</b><code>${esc(r.code)}</code>${mine ? '<em class="rj-badge">Rejoin</em>' : `<small>${status}</small>`}</button>`;
     }).join('');
     return `<section class="home-section"><h2 class="section">Recent tables</h2><div class="recent-tables">${rows}</div></section>`;
