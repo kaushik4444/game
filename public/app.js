@@ -10,6 +10,7 @@
   };
   // Older versions kept a bearer token here. The session is now an HttpOnly cookie, so the old value is never used: delete it.
   store.remove('ct_token');
+  store.remove('ct_recent'); // recent tables used to be kept per browser; they now live on the account
 
   const $app = document.getElementById('app');
   const $banner = document.getElementById('banner');
@@ -38,7 +39,10 @@
     skew: 0, // server clock minus this device's clock, for the turn countdown
     announcement: '',
     dismissedAnnouncement: store.get('ct_ann'), // the text that was dismissed, so a changed announcement shows again
-    recentTables: (() => { try { return JSON.parse(store.get('ct_recent') || '[]'); } catch { return []; } })(),
+    recentTables: [], // the signed-in player's recent tables, from the server (follow the account across devices)
+    page: 'home', // 'home' | 'profile' | 'player' (a public profile); the table and game screens take over while a room is open
+    profile: null, // own profile page: { loading, error, data, tab, history }
+    player: null, // a public profile page: { username, loading, error, data }
     publicTables: [],
     rejoin: [], // running games where a bot is playing this player's seat
     avatarOpen: false,
@@ -176,6 +180,8 @@
     S.email = '';
     S.id = null;
     store.set('ct_csrf', ''); // older versions kept it in localStorage
+    S.page = 'home'; S.profile = null; S.player = null; S.recentTables = []; // nothing of the old account stays on screen
+    if (location.hash === '#profile') { try { history.replaceState(null, '', location.pathname + location.search); } catch { /* ignore */ } }
   }
 
   async function doLogoutAll() {
@@ -400,11 +406,16 @@
     try { history.replaceState(null, '', code ? '#' + code : location.pathname + location.search); } catch { /* ignore */ }
   };
 
-  function rememberTable(room) {
-    if (!room || !room.code || !room.gameId) return;
-    const item = { code: room.code, gameId: room.gameId, name: (gameMeta(room.gameId) || {}).name || room.gameId, at: Date.now() };
-    S.recentTables = [item, ...S.recentTables.filter((x) => x.code !== item.code)].slice(0, 5);
-    store.set('ct_recent', JSON.stringify(S.recentTables));
+  /** Recent tables belong to the account: fetched from the server, so every device shows the same list. */
+  async function loadRecent() {
+    if (S.guest) { S.recentTables = []; return; }
+    try {
+      const r = await fetch('/api/me/recent', { credentials: 'same-origin' });
+      const out = await r.json();
+      if (!r.ok || !out.ok) return;
+      S.recentTables = (out.tables || []).map((t) => ({ code: t.code, gameId: t.gameId, name: (gameMeta(t.gameId) || {}).name || t.gameId }));
+      if (!S.room) render();
+    } catch { /* offline: the list simply stays as it was */ }
   }
 
   function recentTablesHTML() {
@@ -415,7 +426,7 @@
       const status = mine ? 'Your seat is waiting' : live ? (live.status === 'playing' ? 'In progress' : 'Available') : 'Private or expired';
       return `<button class="recent-table ${mine ? 'mine' : ''}" data-act="rejoin" data-code="${esc(r.code)}"><span>↺</span><b>${esc(r.name)}</b><code>${esc(r.code)}</code>${mine ? '<em class="rj-badge">Rejoin</em>' : `<small>${status}</small>`}</button>`;
     }).join('');
-    return `<section class="panel recent-panel"><div class="panel-tag">RECENT TABLES</div><div class="recent-tables">${rows}</div></section>`;
+    return `<section class="home-section"><h2 class="section">Recent tables</h2><div class="recent-tables">${rows}</div></section>`;
   }
 
   /** Big banner at the top of the home screen: a game is running and a bot is playing your seat. */
@@ -511,7 +522,7 @@
       const action = publicTableAction(t);
       return `<div class="public-table"><span class="public-game-icon">${esc(g.icon || '🎴')}</span><div class="public-table-info"><b>${esc(g.name)}</b><span>${esc(t.host)}'s table · ${t.members}/${t.seats} players${t.spectators ? ` · 👁 ${t.spectators}` : ''}</span></div><button class="btn ${action.cls} small" data-act="joinPublic" data-code="${esc(t.code)}" ${action.disabled ? 'disabled' : ''}>${action.label}</button></div>`;
     }).join('');
-    return `<section class="panel public-tables-panel"><div class="row" style="justify-content:space-between"><div><div class="panel-tag">SESSIONS IN PROGRESS <span class="session-count">${count}</span></div><p class="public-help">Open lobbies can be joined; active games can be watched.</p></div><button class="btn ghost small" data-act="toggleSessions" aria-expanded="${S.sessionListOpen}">${S.sessionListOpen ? 'Hide' : 'Show'}</button></div>${S.sessionListOpen ? count ? `<div class="public-tables">${rows}</div>` : '<p class="hint">Nobody is hosting a public table right now.</p>' : ''}</section>`;
+    return `<section class="home-section public-tables-panel"><div class="row" style="justify-content:space-between;align-items:center"><div><h2 class="section">Open tables <span class="session-count">${count}</span></h2></div><button class="btn ghost small" data-act="toggleSessions" aria-expanded="${S.sessionListOpen}">${S.sessionListOpen ? 'Hide' : 'Show'}</button></div>${S.sessionListOpen ? count ? `<div class="public-tables">${rows}</div>` : emptyState('🪑', 'No open tables', 'Create a table and make it public, and it appears here for everyone.') : ''}</section>`;
   }
 
   function joinTable(code, mode) {
@@ -538,6 +549,8 @@
         if (!S.avatar) S.avatar = m.avatar;
         S.ready = true;
         render();
+        loadRecent();
+        if (!S.routed) { S.routed = true; applyRoute(); } // open #profile or #u/<name> if that is where the person came in
         const queue = S.pending;
         S.pending = [];
         for (const fn of queue) {
@@ -555,9 +568,6 @@
         S.ready = false;
         loadSnapshot();
         openAuthSheet('login', m.message || 'Log in to play.');
-        break;
-      case 'stats':
-        drawStats(m.stats);
         break;
       case 'tables':
         S.publicTables = m.tables || [];
@@ -583,7 +593,6 @@
       case 'state': {
         S.room = m.room;
         S.view = m.view;
-        rememberTable(m.room);
         S.skew = (m.room.now || Date.now()) - Date.now();
         setHash(m.room.code);
         soundsFor(prevView, m.view);
@@ -598,6 +607,8 @@
         break;
       }
       case 'left':
+        S.page = 'home';
+        loadRecent();
         S.room = null;
         S.view = null;
         S.chat = [];
@@ -653,6 +664,8 @@
     if (a.dataset.act === 'resendVerification') return doResendVerification();
   });
 
+  window.addEventListener('popstate', () => { if (!S.room) applyRoute(); });
+
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (S.auth) closeOverlay();
@@ -696,6 +709,8 @@
     if (!ok) {
       clearClientSession();
       await loadSnapshot(); // the home page must open for visitors without a session
+      S.routed = true;
+      if (routeFromHash().page === 'player') applyRoute();
       if (hashCode()) {
         const code = hashCode();
         openAuthSheet('login', `Log in to join table ${code}.`);
@@ -894,15 +909,168 @@
 
   const range = (s) => (s.min === s.max ? `${s.min} players` : `${s.min}–${s.max} players`);
 
+  // ------------------------------------------------------------ profile pages
+  const emptyState = (icon, title, text) => `<div class="empty"><span class="empty-ico" aria-hidden="true">${icon}</span><b>${esc(title)}</b><p>${esc(text)}</p></div>`;
+  const loadingBlock = (text = 'Loading…') => `<div class="loading" role="status"><span class="spinner" aria-hidden="true"></span>${esc(text)}</div>`;
+  const errorBlock = (text, retryAct) => `<div class="error-block" role="alert"><p>${esc(text)}</p>${retryAct ? `<button type="button" class="btn ghost small" data-act="${retryAct}">Try again</button>` : ''}</div>`;
+  const RESULT_LABEL = { won: 'Won', lost: 'Lost', left: 'Left early' };
+
+  async function getJson(url) {
+    const r = await fetch(url, { credentials: 'same-origin' });
+    let out = null;
+    try { out = await r.json(); } catch { /* not json */ }
+    if (r.status === 401) { const e = new Error('Please log in again.'); e.status = 401; throw e; }
+    if (!r.ok || !out || out.ok === false) { const e = new Error((out && out.error) || `Request failed (${r.status})`); e.status = r.status; throw e; }
+    return out;
+  }
+
+  /** Hash routes: #profile (own page) and #u/<username> (public). A 6-letter hash is still a table code. */
+  function routeFromHash() {
+    const h = decodeURIComponent(location.hash.slice(1));
+    if (h === 'profile') return { page: 'profile' };
+    const m = /^u\/([a-z0-9_]{3,24})$/i.exec(h);
+    if (m) return { page: 'player', username: m[1].toLowerCase() };
+    return { page: 'home' };
+  }
+  function applyRoute() {
+    const r = routeFromHash();
+    if (r.page === 'profile' && S.guest) { S.page = 'home'; openAuthSheet('login', 'Log in to see your profile.'); return; }
+    if (r.page === 'profile') return void openPage('profile', null, true);
+    if (r.page === 'player') return void openPage('player', r.username, true);
+    S.page = 'home';
+    render();
+  }
+  function openPage(page, arg, fromHash) {
+    if (S.menuOpen) S.menuOpen = false;
+    S.page = page;
+    if (!fromHash) { try { history.pushState(null, '', page === 'profile' ? '#profile' : page === 'player' ? '#u/' + arg : location.pathname + location.search); } catch { /* ignore */ } }
+    window.scrollTo(0, 0);
+    if (page === 'profile') loadProfile(); else if (page === 'player') loadPlayer(arg); else render();
+  }
+
+  async function loadProfile(historyPage = 1) {
+    const keepTab = S.profile && S.profile.tab;
+    S.profile = { loading: true, error: '', data: null, history: null, tab: keepTab || 'overview', historyPage };
+    render();
+    try {
+      const [me, hist] = await Promise.all([getJson('/api/me/profile'), getJson(`/api/me/history?page=${historyPage}`)]);
+      S.profile = { ...S.profile, loading: false, data: me, history: hist };
+      S.name = me.profile.displayName; S.named = true;
+    } catch (e) {
+      S.profile = { ...S.profile, loading: false, error: e.message || 'Could not load your profile.' };
+    }
+    render();
+  }
+  async function loadPlayer(username) {
+    S.player = { username, loading: true, error: '', data: null };
+    render();
+    try { S.player.data = (await getJson(`/api/players/${encodeURIComponent(username)}`)).profile; }
+    catch (e) { S.player.error = e.status === 404 ? 'There is no player with that username.' : (e.message || 'Could not load this profile.'); }
+    S.player.loading = false;
+    render();
+  }
+
+  const joinedText = (iso) => (iso ? `Joined ${fmtDate(iso)}` : '');
+
+  function historyHTML(h) {
+    if (!h || !h.total) return emptyState('🕘', 'No games yet', 'Finished games show up here with the game, the date and how it went.');
+    const rows = h.items.map((g) => {
+      const meta = statsGame(g.gameId);
+      return `<li class="hist-row"><span class="hist-ico" aria-hidden="true">${esc(meta.icon || '🎴')}</span><span class="hist-main"><b>${esc(meta.name)}</b><small>${esc(fmtDate(g.finishedAt))} · ${g.humans} player${g.humans === 1 ? '' : 's'}${g.seats > g.humans ? ` + ${g.seats - g.humans} bot${g.seats - g.humans === 1 ? '' : 's'}` : ''}</small></span><span class="result ${g.result}">${RESULT_LABEL[g.result]}</span></li>`;
+    }).join('');
+    const pager = h.pages > 1 ? `<nav class="pager" aria-label="History pages"><button type="button" class="btn ghost small" data-act="historyPage" data-page="${h.page - 1}" ${h.page <= 1 ? 'disabled' : ''}>← Newer</button><span>Page ${h.page} of ${h.pages}</span><button type="button" class="btn ghost small" data-act="historyPage" data-page="${h.page + 1}" ${h.page >= h.pages ? 'disabled' : ''}>Older →</button></nav>` : '';
+    return `<ul class="hist-list">${rows}</ul>${pager}<p class="hint" style="text-align:left">Games you left early are listed but not counted in your statistics.</p>`;
+  }
+
+  function renderProfilePage() {
+    const P = S.profile || { loading: true };
+    let inner;
+    if (P.loading) inner = loadingBlock('Loading your profile…');
+    else if (P.error) inner = errorBlock(P.error, 'reloadProfile');
+    else {
+      const me = P.data.profile;
+      const name = me.displayName;
+      const tab = P.tab || 'overview';
+      const tabBtn = (id, label) => `<button type="button" role="tab" class="tab ${tab === id ? 'on' : ''}" aria-selected="${tab === id}" data-act="profileTab" data-tab="${id}">${label}</button>`;
+      const panel = tab === 'history' ? historyHTML(P.history)
+        : tab === 'account' ? `<div class="account-list">
+            <div class="setting-row"><div><b>Email</b><small>${esc(me.email || 'No email on this account')}${me.email ? (me.emailVerified ? ' · verified' : ' · not verified') : ''}. Only you can see this.</small></div></div>
+            <div class="setting-row"><div><b>Public profile</b><small>Anyone with the link can see your username, display name, avatar, join date and win totals.</small></div><button type="button" class="btn ghost small" data-act="copyProfileLink">Copy link</button></div>
+            <div class="setting-row"><div><b>Sessions</b><small>Sign out of this device, or of every device you are logged in on.</small></div><span class="row" style="gap:6px"><button type="button" class="btn ghost small" data-act="logout">Log out</button><button type="button" class="btn ghost small" data-act="logoutAll">Everywhere</button></span></div>
+            <div class="danger-zone"><div><b>Delete account</b><small>Permanently removes your account and sign-in. This cannot be undone.</small></div><button type="button" class="btn danger small" data-act="openDeleteAccount">Delete account…</button></div>
+          </div>`
+        : statsHTML(P.data.stats);
+      inner = `<header class="pp-head">
+          <span class="avatar big" style="background:${avatarColor(name)}">${me.avatar ? esc(me.avatar) : initial(name)}</span>
+          <div class="pp-id"><h1>${esc(name)}</h1><p>${me.username ? `@${esc(me.username)} · ` : ''}${esc(joinedText(me.joinedAt))}</p></div>
+          <button type="button" class="btn ghost small" data-act="editProfile">Edit profile</button>
+        </header>
+        <div class="tabs" role="tablist">${tabBtn('overview', 'Overview')}${tabBtn('history', `History${P.history && P.history.total ? ` <small>${P.history.total}</small>` : ''}`)}${tabBtn('account', 'Account')}</div>
+        <section class="tab-panel" role="tabpanel">${panel}</section>`;
+    }
+    $app.innerHTML = `${topbarHTML()}<main class="page profile-page"><a class="back-link" href="/" data-act="goHome">← Back to games</a>${inner}</main>`;
+  }
+
+  function renderPlayerPage() {
+    const P = S.player || { loading: true };
+    let inner;
+    if (P.loading) inner = loadingBlock('Loading profile…');
+    else if (P.error) inner = errorBlock(P.error);
+    else {
+      const d = P.data;
+      inner = `<header class="pp-head"><span class="avatar big" style="background:${avatarColor(d.displayName)}">${d.avatar ? esc(d.avatar) : initial(d.displayName)}</span><div class="pp-id"><h1>${esc(d.displayName)}</h1><p>@${esc(d.username)} · ${esc(joinedText(d.joinedAt))}</p></div></header>
+        <div class="stat-grid"><div class="stat-tile"><span class="stat-v">${d.played}</span><span class="stat-l">Games played</span></div><div class="stat-tile good"><span class="stat-v">${d.wins}</span><span class="stat-l">Wins</span></div><div class="stat-tile"><span class="stat-v">${d.winRate === null ? '–' : d.winRate + '%'}</span><span class="stat-l">Win rate</span></div></div>`;
+    }
+    $app.innerHTML = `${topbarHTML()}<main class="page profile-page"><a class="back-link" href="/" data-act="goHome">← Back to games</a>${inner}</main>`;
+  }
+
+  // ---- account deletion
+  function openDeleteAccountDialog() {
+    openModal('Delete your account', `<form id="deleteForm" class="auth-form">
+        <p class="hint" style="text-align:left;color:var(--ink)">This permanently deletes your account. It cannot be undone.</p>
+        <ul class="plain-list">
+          <li><b>Deleted:</b> your login (email and password), your username and display name, your avatar, your sessions on every device and your recent tables.</li>
+          <li><b>Kept:</b> the games you finished, so other players’ history and results stay correct. Your seat in them is shown as “Deleted player” and is no longer linked to you.</li>
+        </ul>
+        <label class="label" for="deletePw">Enter your password to confirm</label>
+        <input id="deletePw" type="password" required autocomplete="current-password" placeholder="Password">
+        <p id="deleteMsg" class="auth-msg" role="alert" hidden></p>
+        <div class="row" style="justify-content:flex-end;gap:8px"><button type="button" class="btn ghost" data-modal-close>Cancel</button><button type="submit" class="btn danger">Delete my account</button></div>
+      </form>`, (o) => {
+      o.addEventListener('submit', async (e) => {
+        if (e.target.id !== 'deleteForm') return;
+        e.preventDefault();
+        const msg = o.querySelector('#deleteMsg');
+        const btn = e.target.querySelector('button[type=submit]');
+        btn.disabled = true;
+        try {
+          await postJson('/api/me/delete-account', { password: o.querySelector('#deletePw').value });
+          closeModal();
+          S.signedOutIntentionally = true;
+          clearClientSession();
+          for (const k of ['ct_name', 'ct_username', 'ct_avatar']) store.remove(k);
+          S.name = ''; S.username = ''; S.named = false; S.avatar = ''; S.profile = null; S.recentTables = [];
+          S.ready = false; S.room = null; S.view = null; S.page = 'home';
+          try { history.replaceState(null, '', location.pathname); } catch { /* ignore */ }
+          loadSnapshot();
+          toast('Your account has been deleted.');
+        } catch (err) {
+          msg.textContent = err.message || 'Could not delete the account.';
+          msg.hidden = false;
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+
   // ------------------------------------------------------------ top bar, account menu and its dialogs
-  const WHATS_NEW_VERSION = '2026-11-friend-testing';
+  const WHATS_NEW_VERSION = '2026-11-profiles';
   const WHATS_NEW = [
-    ['🧪', 'Friend testing is open', 'Tableverse is now open for friend testing with fast sign-up and browser play on phone and desktop.'],
-    ['🔓', 'Optional email verification mode', 'Friend-testing mode can temporarily allow immediate play after sign-up while still keeping accounts unverified in storage until verified.'],
-    ['⚙️', 'Server-controlled auth policy', 'The app now follows the server policy for verification requirements, so login/register messaging always matches the backend mode.'],
-    ['🔐', 'Accounts', 'Sign in with email and password. Your name, avatar and stats follow your account to every device.'],
-    ['🧑‍🎤', 'Account menu', 'Profile, settings, stats, what’s new and log out now live in the menu at the top right.'],
-    ['🌐', 'Public and private tables', 'A live table directory, one-tap rejoin and stronger 6-letter room codes.'],
+    ['👤', 'Profiles and history', 'Your profile page shows your stats and every finished game, with pages. You can change your display name there.'],
+    ['🗑️', 'Delete your account', 'From your profile, with your password. Your finished games stay in other players\u2019 history as \u201cDeleted player\u201d.'],
+    ['🕘', 'Recent tables follow you', 'They are saved on your account now, so any device shows the same list.'],
+    ['📜', 'Clearer game logs', 'Every log line now says who did what.'],
+    ['🧪', 'Friend testing is open', 'Sign up and play in the browser on phone or desktop.'],
   ];
   const hasNewNews = () => S.wnSeen !== WHATS_NEW_VERSION;
 
@@ -916,8 +1084,7 @@
     const item = (act, icon, label, extra = '', cls = '') => `<button type="button" role="menuitem" class="menu-item ${cls}" data-act="${act}"><span class="mi-ico" aria-hidden="true">${icon}</span><span class="mi-label">${label}</span>${extra}</button>`;
     const menu = S.menuOpen ? `<div class="menu" role="menu" aria-label="Account">
         <div class="menu-head">${av}<div class="menu-who"><b>${esc(name)}</b>${S.username ? `<small>@${esc(S.username)}</small>` : ''}</div></div>
-        ${item('openProfile', '👤', 'Profile')}
-        ${item('stats', '📊', 'My stats')}
+        ${item('openProfilePage', '👤', 'Profile and history')}
         ${item('openSettings', '⚙️', 'Settings')}
         ${item('openWhatsNew', '🎉', 'What’s new', hasNewNews() ? '<span class="mi-new">New</span>' : '')}
         <div class="menu-sep" role="separator"></div>
@@ -956,69 +1123,65 @@
     if (onMount) onMount(o);
   }
 
-  function openProfileDialog() {
+  /** Edit name and avatar. The name is saved over HTTP (validated on the server); the avatar goes through the table socket as before. */
+  function openEditProfileDialog() {
     const body = () => {
       const name = S.named ? S.name : '';
       const picks = S.avatars.map((a) => `<button type="button" class="av-pick ${a === S.avatar ? 'on' : ''}" data-modal-act="pickAvatar" data-a="${esc(a)}" aria-label="Avatar ${esc(a)}" aria-pressed="${a === S.avatar}">${esc(a)}</button>`).join('');
-      return `<div class="profile-header"><div class="profile-preview"><span class="avatar big" style="background:${avatarColor(name || 'Player')}">${S.avatar ? esc(S.avatar) : initial(name || 'Player')}</span><div class="profile-meta"><span class="profile-welcome">${name ? `Playing as <b>${esc(name)}</b>` : 'Choose a display name'}</span>${S.username ? `<span class="profile-user">@${esc(S.username)}</span>` : ''}<span class="profile-hint">Seen by friends at the table</span></div></div></div>
-        <label class="label" for="profileName">Display name</label>
-        <input id="profileName" type="text" maxlength="20" autocomplete="nickname" placeholder="Your nickname" value="${esc(name)}">
+      return `<form id="nameForm" class="auth-form">
+          <label class="label" for="profileName">Display name</label>
+          <input id="profileName" type="text" minlength="2" maxlength="20" required autocomplete="nickname" value="${esc(name)}">
+          <small class="hint" style="text-align:left">2 to 20 characters. Other players at your tables see this name.</small>
+          <p id="nameMsg" class="auth-msg" role="alert" hidden></p>
+          <button class="btn" type="submit">Save name</button>
+        </form>
         <span class="label" style="margin-top:6px">Avatar</span>
         <div class="av-picks">${picks}</div>`;
     };
-    openModal('Profile', body(), (o) => {
-      const redraw = () => {
-        const input = o.querySelector('#profileName');
-        const keep = input ? input.value : '';
-        o.querySelector('.modal-body').innerHTML = body();
-        const again = o.querySelector('#profileName');
-        if (again && keep !== again.value) again.value = keep;
-      };
+    openModal('Edit profile', body(), (o) => {
       modalActions.pickAvatar = (el) => {
         S.avatar = el.dataset.a;
         store.set('ct_avatar', S.avatar);
         send({ t: 'setName', name: S.name || undefined, avatar: S.avatar });
-        redraw();
+        const keep = o.querySelector('#profileName').value;
+        o.querySelector('.modal-body').innerHTML = body();
+        o.querySelector('#profileName').value = keep;
         render();
       };
-      let timer = null;
-      o.addEventListener('input', (e) => {
-        if (e.target.id !== 'profileName') return;
-        S.name = e.target.value.trim().slice(0, 20);
-        S.named = !!S.name;
-        if (S.name) store.set('ct_name', S.name);
-        clearTimeout(timer);
-        timer = setTimeout(() => { if (S.name) { send({ t: 'setName', name: S.name, avatar: S.avatar || undefined }); render(); } }, 400);
+      o.addEventListener('submit', async (e) => {
+        if (e.target.id !== 'nameForm') return;
+        e.preventDefault();
+        const msg = o.querySelector('#nameMsg');
+        const btn = e.target.querySelector('button[type=submit]');
+        btn.disabled = true;
+        try {
+          const out = await postJson('/api/me/display-name', { displayName: o.querySelector('#profileName').value });
+          S.name = out.displayName; S.named = true;
+          store.set('ct_name', S.name);
+          if (S.profile && S.profile.data) S.profile.data.profile.displayName = S.name;
+          closeModal();
+          toast('Name saved');
+          render();
+        } catch (err) {
+          msg.textContent = err.message || 'Could not save the name.';
+          msg.hidden = false;
+          btn.disabled = false;
+        }
       });
     });
   }
 
   function openSettingsDialog() {
-    const resendLabel = S.requireEmailVerification ? 'Resend verification email' : 'Resend verification email — Soon';
-    const verificationStatus = S.emailVerified
-      ? `<div class="setting-row verify-status"><div><b>Email verified</b><small>Your email address is verified.</small></div><span class="verify-pill verified">Verified</span></div>`
-      : `<div class="setting-row verify-status"><div><b>Email verification pending</b><small>Your email address has not been verified yet. ${S.requireEmailVerification ? 'Please verify your email before entering the lobby.' : 'You can play normally. Email verification is optional during friend testing.'}</small></div><span class="verify-pill ${S.requireEmailVerification ? 'required' : 'optional'}">${S.requireEmailVerification ? 'Pending' : 'Pending'}</span></div>
-         <div class="setting-row verify-status"><div><b>Verification email</b><small>${S.requireEmailVerification ? 'Use this to send another verification link to your account email.' : 'Email verification is optional during friend testing. Resending will be available soon.'}</small></div><button type="button" class="btn ghost small" data-modal-act="resendVerificationFromSettings" ${S.requireEmailVerification ? '' : 'disabled aria-disabled="true"'}>${resendLabel}</button></div>`;
-    const body = () => `<div class="setting-row"><div><b>Sound effects</b><small>Card sounds, turn alerts and fanfares.</small></div><button type="button" class="btn ${CardTable.sound.isMuted() ? 'ghost' : ''} small" data-modal-act="toggleSound" aria-pressed="${!CardTable.sound.isMuted()}">${CardTable.sound.isMuted() ? 'Off' : 'On'}</button></div>
-      <div class="setting-row"><div><b>Recent tables</b><small>${S.recentTables.length ? `${S.recentTables.length} remembered on this device.` : 'Nothing remembered on this device.'}</small></div><button type="button" class="btn ghost small" data-modal-act="clearRecent" ${S.recentTables.length ? '' : 'disabled'}>Clear</button></div>
-      <div class="setting-row"><div><b>Announcements</b><small>Show the site banner again if you dismissed it.</small></div><button type="button" class="btn ghost small" data-modal-act="showAnnouncement" ${S.announcement && S.dismissedAnnouncement === S.announcement ? '' : 'disabled'}>Show</button></div>
-      ${verificationStatus}
-      <div class="setting-row"><div><b>Account</b><small>${S.username ? `Signed in as @${esc(S.username)}.` : 'Signed in.'} Signing out everywhere ends every session on every device.</small></div><button type="button" class="btn ghost small" data-modal-act="logoutAllFromSettings">Log out everywhere</button></div>`;
+    const body = () => `<div class="setting-row"><div><b>Sound effects</b><small>Card sounds, turn alerts and fanfares. Saved on this device.</small></div><button type="button" class="btn ${CardTable.sound.isMuted() ? 'ghost' : ''} small" data-modal-act="toggleSound" aria-pressed="${!CardTable.sound.isMuted()}">${CardTable.sound.isMuted() ? 'Off' : 'On'}</button></div>
+      <div class="setting-row"><div><b>Recent tables</b><small>${S.recentTables.length ? `${S.recentTables.length} saved on your account.` : 'Nothing saved yet.'}</small></div><button type="button" class="btn ghost small" data-modal-act="clearRecent" ${S.recentTables.length ? '' : 'disabled'}>Clear</button></div>
+      <div class="setting-row"><div><b>Account</b><small>Profile, history and account deletion are on your profile page.</small></div><button type="button" class="btn ghost small" data-modal-act="openProfileFromSettings">Open</button></div>`;
     openModal('Settings', body(), (o) => {
       const redraw = () => { o.querySelector('.modal-body').innerHTML = body(); };
       modalActions.toggleSound = () => { CardTable.sound.toggle(); redraw(); };
-      modalActions.clearRecent = () => { S.recentTables = []; store.set('ct_recent', '[]'); redraw(); render(); };
-      modalActions.showAnnouncement = () => { S.dismissedAnnouncement = null; store.remove('ct_ann'); redraw(); render(); };
-      modalActions.resendVerificationFromSettings = async () => {
-        if (!S.requireEmailVerification || S.emailVerified || !S.email) return;
-        try {
-          await postJson('/api/auth/resend-verification', { email: S.email });
-          toast('If this account needs verifying, a new link has been sent.');
-        } catch (e) {
-          toast(e.message || 'Could not send the email');
-        }
+      modalActions.clearRecent = async () => {
+        try { await postJson('/api/me/recent/clear', {}); S.recentTables = []; redraw(); render(); } catch (err) { toast(err.message || 'Could not clear recent tables'); }
       };
-      modalActions.logoutAllFromSettings = () => { closeModal(); doLogoutAll(); };
+      modalActions.openProfileFromSettings = () => { closeModal(); openPage('profile'); };
     });
   }
 
@@ -1035,7 +1198,9 @@
     const keep = ae && ae.id === 'name' ? { start: ae.selectionStart, end: ae.selectionEnd } : null;
     if (!S.ready && !S.guest && !S.room) {
       $app.innerHTML = '<div class="page"><div class="brand"><div class="mark">🂡</div><h1>Tableverse</h1><p>Connecting…</p></div></div>';
-    } else if (!S.room) renderHome();
+    } else if (!S.room && S.page === 'profile' && !S.guest) renderProfilePage();
+    else if (!S.room && S.page === 'player') renderPlayerPage();
+    else if (!S.room) renderHome();
     else if (S.room.status === 'lobby') renderLobby();
     else renderGame();
     updateWatchers();
@@ -1050,80 +1215,42 @@
   }
 
   function renderHome() {
-    const tiles = S.games
-      .map(
-        (g) => `
-      <article class="panel game-tile" style="--accent:${esc(g.accent || '#7b4bd0')}">
+    const tiles = S.games.map((g) => `
+      <article class="game-card" style="--accent:${esc(g.accent || '#7b4bd0')}">
         <div class="game-art" aria-hidden="true">${esc(g.icon || '🎴')}</div>
         <div class="game-body">
-          <div class="game-header">
-            <h3>${esc(g.name)}</h3>
-            <span class="game-badge">${range(g.seats)}</span>
-          </div>
+          <h3>${esc(g.name)} <small>${range(g.seats)}</small></h3>
           <p>${esc(g.tagline)}</p>
-          <div class="game-meta-tags">
-            <span class="meta-pill">🤖 AI Bots fill seats</span>
-            <span class="meta-pill">⚡ Instant join</span>
-            <span class="meta-pill">💬 Live chat</span>
-          </div>
           <div class="row game-actions">
-            <button class="btn" data-act="create" data-game="${esc(g.id)}">Create a table</button>
-            <button class="btn ghost" data-act="rules" data-game="${esc(g.id)}">How to play</button>
+            <button class="btn small" data-act="create" data-game="${esc(g.id)}">Create table</button>
+            <button class="btn ghost small" data-act="rules" data-game="${esc(g.id)}">Rules</button>
           </div>
         </div>
-      </article>`
-      )
-      .join('');
-    const who = S.guest ? '' : (S.named ? S.name : '');
+      </article>`).join('');
+    const name = S.guest ? '' : (S.named ? S.name : '');
     $app.innerHTML = `
     ${topbarHTML()}
-    <main class="page wide home-arena">
-      <section class="hero">
-        <div class="hero-copy">
-          <div class="arena-tag">⚔️ Multiplayer card tables</div>
-          <h1>${who ? `Welcome back, <span class="hero-name">${esc(who)}</span>` : 'Your friends. Your games. <span class="hero-name">One table.</span>'}</h1>
-          <p class="brand-desc">${S.guest ? 'Real-time Wizard, 29, Poker and The Mind with instant rooms and smart bots that fill any empty seat. Right in your browser.' : 'Pick a game, open a table and send the link, or jump back in with a code. Bots fill any empty seat.'}</p>
-          ${S.guest ? `<div class="row hero-cta"><button type="button" class="btn big" data-act="showRegister">Create free account</button><button type="button" class="btn ghost big" data-act="showLogin">Log in</button></div>` : `<div class="row hero-cta"><button type="button" class="btn big" data-act="scrollGames">Choose a game</button><button type="button" class="btn ghost big" data-act="stats">📊 My stats</button></div>`}
-          <div class="arena-features">
-            <span class="feat-badge">✨ No install</span>
-            <span class="feat-badge">📱 Phone &amp; desktop</span>
-            <span class="feat-badge">🛡️ Fair hidden-state deals</span>
-          </div>
+    <main class="page wide home">
+      <section class="home-hero">
+        <div class="home-intro">
+          <h1>${name ? `Hi, ${esc(name)}` : 'Your friends. Your games. One table.'}</h1>
+          <p>${name ? 'Host a table below, or join a friend with their code.' : 'Free card games in your browser. Bots fill any empty seat.'}</p>
+          ${S.guest ? '<div class="row" style="gap:8px"><button type="button" class="btn" data-act="showRegister">Create account</button><button type="button" class="btn ghost" data-act="showLogin">Log in</button></div>' : ''}
         </div>
-        <section class="panel join-panel">
-          <div class="panel-tag">QUICK JOIN</div>
+        <form class="join-form" id="joinForm" aria-label="Join a table">
           <label class="label" for="code">Have a table code?</label>
-          <p class="join-sub">Enter the 6-letter code from your friend to sit down straight away.</p>
-          <form class="join-form" id="joinForm">
-            <input id="code" type="text" maxlength="6" placeholder="ABCDEF" autocomplete="off" autocapitalize="characters" spellcheck="false" value="${esc(S.draftCode)}">
-            <button class="btn big-join" type="submit">Join</button>
-          </form>
-          <div class="join-tips">Or open an invite link: <code>site/#CODE</code></div>
-        </section>
+          <div class="join-row"><input id="code" type="text" maxlength="6" placeholder="ABCDEF" autocomplete="off" autocapitalize="characters" spellcheck="false" value="${esc(S.draftCode)}"><button class="btn" type="submit">Join</button></div>
+        </form>
       </section>
       ${rejoinBannerHTML()}
-      ${S.announcement && S.dismissedAnnouncement !== S.announcement ? `
-      <div class="whats-new announcement panel" role="status">
-        <span class="wn-icon">📣</span>
-        <div class="wn-content">${esc(S.announcement)}</div>
-        <button class="wn-close" data-act="dismissAnnouncement" aria-label="Dismiss announcement">✕</button>
-      </div>` : ''}
-      ${publicTablesHTML()}
+      ${S.announcement && S.dismissedAnnouncement !== S.announcement ? `<div class="notice-bar" role="status"><span>${esc(S.announcement)}</span><button type="button" class="wn-close" data-act="dismissAnnouncement" aria-label="Dismiss announcement">✕</button></div>` : ''}
       ${recentTablesHTML()}
-      <div class="section-head" id="games">
+      <section class="home-section" id="games">
         <h2 class="section">Games</h2>
-        <span class="section-sub">Pick a game and host a table for your friends</span>
-      </div>
-      <section class="game-grid">${tiles}</section>
-      <a class="panel tool-tile" href="/scorecard.html"><span class="tool-ico">📝</span><span><b>Wizard scorecard</b><br><small>Playing with a real deck? Enter bids and tricks each round and the scores are worked out for you. Works offline.</small></span></a>
-      <section class="roadmap-box panel">
-        <div class="roadmap-head"><span class="roadmap-icon">🧭</span><div><b>More arena games coming soon</b><p>New ways to play with friends are on the way.</p></div></div>
-        <div class="upcoming-games">
-          <div class="upcoming-game"><span>⛏️</span><b>Saboteur</b><small>Hidden roles &amp; tunnel strategy</small><em>In development</em></div>
-          <div class="upcoming-game"><span>🐂</span><b>6 nimmt!</b><small>Take rows, avoid the bullheads</small><em>Coming next</em></div>
-          <div class="upcoming-game"><span>🌈</span><b>UNO</b><small>Classic colour-changing card battles</small><em>Coming next</em></div>
-        </div>
+        ${tiles ? `<div class="game-grid">${tiles}</div>` : loadingBlock('Loading games…')}
       </section>
+      ${publicTablesHTML()}
+      <footer class="home-foot"><a href="/scorecard.html">Wizard paper scorecard</a></footer>
     </main>`;
   }
 
@@ -1214,25 +1341,9 @@
   const KIND_NOTE = { team: 'team game: a win means your team won', coop: 'co-operative: the whole table wins or loses together' };
   const fmtDate = (iso) => { try { return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); } catch { return ''; } };
 
-  function openStats() {
-    const old = document.getElementById('stats-overlay');
-    if (old) old.remove();
-    const overlay = document.createElement('div');
-    overlay.id = 'stats-overlay';
-    overlay.className = 'overlay';
-    overlay.innerHTML = '<div class="sheet stats-sheet" data-stop="1" role="dialog" aria-label="My stats"><div class="row" style="justify-content:space-between"><h2>📊 My stats</h2><button class="btn ghost small" data-stats-close>Close</button></div><div class="stats-body"><p class="hint">Loading…</p></div></div>';
-    overlay.addEventListener('click', (e) => { if (e.target === overlay || e.target.closest('[data-stats-close]')) overlay.remove(); });
-    document.body.appendChild(overlay);
-    send({ t: 'getStats' });
-  }
-
-  function drawStats(s) {
-    const body = document.querySelector('#stats-overlay .stats-body');
-    if (!body || !s) return;
-    if (!s.played) {
-      body.innerHTML = '<p class="hint" style="text-align:left">No finished games yet. Finish a game with friends or bots and your record shows up here. Games you leave early do not count.</p>';
-      return;
-    }
+  /** The statistics block of a profile. Games you left early and bot seats are never counted (the server leaves them out). */
+  function statsHTML(s) {
+    if (!s || !s.played) return emptyState('🃏', 'No finished games yet', 'Finish a game with friends or bots and your record shows up here. Games you leave early are not counted.');
     const fav = s.favouriteGame ? statsGame(s.favouriteGame) : null;
     const tile = (label, value, cls = '') => `<div class="stat-tile ${cls}"><span class="stat-v">${value}</span><span class="stat-l">${label}</span></div>`;
     const games = s.perGame.map((g) => {
@@ -1240,7 +1351,7 @@
       return `<div class="stat-game"><span class="stat-game-name">${esc(meta.icon || '🎴')} ${esc(meta.name)}${KIND_NOTE[g.kind] ? ` <small class="stat-kind" title="${esc(KIND_NOTE[g.kind])}">${g.kind === 'coop' ? 'co-op' : 'teams'}</small>` : ''}</span><span class="stat-game-rec">${g.wins}W · ${g.losses}L</span><span class="stat-bar" aria-hidden="true"><i style="width:${g.winRate || 0}%"></i></span><span class="stat-game-pct">${g.winRate}%</span>${g.best !== null && g.bestLabel ? `<span class="stat-game-best">${esc(g.bestLabel)}: <b>${esc(g.bestText)}</b></span>` : ''}</div>`;
     }).join('');
     const recent = s.recent.map((r) => `<span class="stat-chip ${r.won ? 'w' : 'l'}" title="${esc(statsGame(r.gameId).name)} · ${esc(fmtDate(r.finishedAt))}">${esc(statsGame(r.gameId).icon || '🎴')}<b>${r.won ? 'W' : 'L'}</b></span>`).join('');
-    body.innerHTML = `
+    return `
       <div class="stat-grid">
         ${tile('Games played', s.played)}
         ${tile('Wins', s.wins, 'good')}
@@ -1254,7 +1365,7 @@
       <div class="stat-games">${games}</div>
       <h3 class="stat-h">Last ${s.recent.length} games <small>(newest first)</small></h3>
       <div class="stat-recent">${recent}</div>
-      <p class="hint" style="text-align:left;margin-top:12px">Ties share the win. ${s.lastPlayed ? `Last played ${esc(fmtDate(s.lastPlayed))}. ` : ''}${s.memberSince ? `Playing since ${esc(fmtDate(s.memberSince))}. ` : ''}Your stats belong to the player saved in this browser, so clearing site data starts a new player.</p>`;
+      <p class="hint" style="text-align:left;margin-top:12px">Ties share the win. Games you left early are not counted.</p>`;
   }
 
   function openActivityLog() {
@@ -1311,12 +1422,23 @@
       render();
     },
     scrollGames: () => document.getElementById('games')?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }),
+    goHome: (el, e) => { if (e) e.preventDefault(); openPage('home'); },
+    reloadProfile: () => loadProfile(),
+    profileTab: (el) => { if (S.profile) { S.profile.tab = el.dataset.tab; render(); } },
+    historyPage: (el) => loadProfile(Number(el.dataset.page) || 1),
+    editProfile: () => openEditProfileDialog(),
+    openDeleteAccount: () => openDeleteAccountDialog(),
+    copyProfileLink: async () => {
+      const u = S.profile && S.profile.data && S.profile.data.profile.username;
+      if (!u) return;
+      const url = `${location.origin}/#u/${u}`;
+      try { await navigator.clipboard.writeText(url); toast('Profile link copied'); } catch { window.prompt('Copy this link:', url); }
+    },
     toggleMenu: () => { S.menuOpen = !S.menuOpen; render(); },
-    openProfile: () => { S.menuOpen = false; render(); openProfileDialog(); },
+    openProfilePage: () => { S.menuOpen = false; openPage('profile'); },
     openSettings: () => { S.menuOpen = false; render(); openSettingsDialog(); },
     openWhatsNew: () => { S.menuOpen = false; openWhatsNewDialog(); },
     toggleAvatars: () => { S.avatarOpen = !S.avatarOpen; render(); },
-    stats: () => { if (S.menuOpen) { S.menuOpen = false; render(); } return authed() ? openStats() : gateLogin(() => openStats()); },
     emotes: () => toggleEmoteBar(),
     activityLog: () => openActivityLog(),
     sound: () => { CardTable.sound.toggle(); render(); },
@@ -1371,7 +1493,7 @@
 
   $app.addEventListener('click', (e) => {
     const el = e.target.closest('[data-act]');
-    if (el && !el.disabled && Object.hasOwn(actions, el.dataset.act)) actions[el.dataset.act](el);
+    if (el && !el.disabled && Object.hasOwn(actions, el.dataset.act)) actions[el.dataset.act](el, e);
   });
   $app.addEventListener('input', (e) => {
     if (e.target.id === 'name') {
