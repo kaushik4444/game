@@ -346,7 +346,7 @@ function cookieSocket(port, cookie) {
         assert.match(reg.json.message, /optional|log in now/i);
 
         const requiredMail = { sent: [], assertReady() {}, async sendVerification(m) { this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset() {} };
-        const required = await start({ ...fast, matchLog: quiet(), log: quiet(), emailSender: requiredMail, env: { ...process.env, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'true' } });
+        const required = await start({ ...fast, matchLog: quiet(), log: quiet(), emailSender: requiredMail, env: { ...process.env, ...testRateLimits, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'true' } });
         try {
           const rb = new Browser(required.port); await rb.csrf();
           const remail = `required.${authSeq++}@test.local`;
@@ -388,7 +388,7 @@ function cookieSocket(port, cookie) {
         assert.equal(optionalForgot.status, 200);
         assert.equal(optionalForgot.json.debug, undefined, 'forgot-password remains generic after optional-mode flows');
 
-        const guestRequired = await start({ ...fast, matchLog: quiet(), log: quiet(), emailSender: { sent: [], assertReady() {}, async sendVerification(m) { this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset() {} }, env: { ...process.env, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'true' } });
+        const guestRequired = await start({ ...fast, matchLog: quiet(), log: quiet(), emailSender: { sent: [], assertReady() {}, async sendVerification(m) { this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset() {} }, env: { ...process.env, ...testRateLimits, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'true' } });
         try {
           const gb = new Browser(guestRequired.port);
           const gs = await gb.get('/api/auth/session');
@@ -399,7 +399,7 @@ function cookieSocket(port, cookie) {
         assert.equal(resendUnknown.status, 200);
         assert.match(String(resendUnknown.json.message || ''), /If this account exists/i, 'resend response remains non-enumerating');
 
-        const freshOptional = await start({ ...fast, matchLog: quiet(), log: quiet(), emailSender: { sent: [], assertReady() {}, async sendVerification(m) { this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset() {} }, env: { ...process.env, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'false' } });
+        const freshOptional = await start({ ...fast, matchLog: quiet(), log: quiet(), emailSender: { sent: [], assertReady() {}, async sendVerification(m) { this.sent.push({ kind: 'verify', ...m }); }, async sendPasswordReset() {} }, env: { ...process.env, ...testRateLimits, NODE_ENV: 'production', REQUIRE_EMAIL_VERIFICATION: 'false' } });
         try {
           const ob = new Browser(freshOptional.port); await ob.csrf();
           const oe = `fresh.optional.${authSeq++}@test.local`;
