@@ -122,7 +122,7 @@ function createMatchQueue({ record, spoolDir = null, delays = DEFAULT_DELAYS, lo
       if (closed) {
         // a game that ends while the process is shutting down is not attempted, but it is not lost either: the next start replays it
         spoolWrite(key, rec);
-        log.warn(`[matches] shutting down: ${summary(rec)} was kept in the spool for the next start`);
+        log.warn(`[matches] shutting down: ${summary(rec)} ${spoolDir ? 'was kept in the spool for the next start' : 'could not be saved and no spool is configured: this result is lost'}`);
         return Promise.resolve({ status: 'failed', attempts: 0, error: 'shutting down' });
       }
       if (pending.has(key)) return pending.get(key); // same game queued twice in this process
