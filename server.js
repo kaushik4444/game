@@ -714,21 +714,27 @@ function start(opts = {}) {
       }
       if (room.status !== 'lobby') {
         // the game is already running: the newcomer watches
-        if (room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
-        if (p.room) leaveRoom(p);
+        const alreadySpectating = isSpec(room, p.id);
+        if (!alreadySpectating && room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
+        if (p.room && p.room !== room.code) leaveRoom(p);
         addSpectator(room, p);
-        sys(room, `👁 ${p.name} is watching`);
-        notifyOthers(room, p.id, `👁 ${p.name} is watching the game`);
+        if (!alreadySpectating) {
+          sys(room, `👁 ${p.name} is watching`);
+          notifyOthers(room, p.id, `👁 ${p.name} is watching the game`);
+        }
         broadcast(room);
         sendChatLog(p, room);
         return;
       }
       if (wantsSpectate) {
-        if (room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
-        if (p.room) leaveRoom(p);
+        const alreadySpectating = isSpec(room, p.id);
+        if (!alreadySpectating && room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
+        if (p.room && p.room !== room.code) leaveRoom(p);
         addSpectator(room, p);
-        sys(room, `👁 ${p.name} is watching`);
-        notifyOthers(room, p.id, `👁 ${p.name} is watching the lobby`);
+        if (!alreadySpectating) {
+          sys(room, `👁 ${p.name} is watching`);
+          notifyOthers(room, p.id, `👁 ${p.name} is watching the lobby`);
+        }
         broadcast(room);
         sendChatLog(p, room);
         return;
@@ -979,6 +985,14 @@ function start(opts = {}) {
     }
 
     const auth = await dbAuth.sessionInfo(p.token);
+    // A player may still be present in the in-memory token map after sign-out, password reset,
+    // or session revocation from another request/server instance. Never let that cache bypass
+    // the authoritative PostgreSQL session state.
+    if (dbPool.hasDatabase() && !auth.authenticated) {
+      tokens.delete(p.token);
+      send(ws, { t: 'authRequired', message: 'Your session is invalid or expired. Please log in again.' });
+      return ws.close(1008, 'invalid session');
+    }
     if (dbPool.hasDatabase() && dbAuth.isEmailVerificationRequired(env) && !auth.emailVerified) {
       send(ws, { t: 'authRequired', message: 'Please verify your email before entering the lobby.' });
       return ws.close(1008, 'email verification required');
