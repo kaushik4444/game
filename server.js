@@ -183,6 +183,9 @@ function start(opts = {}) {
       }
       try { if (p.room) leaveRoom(p); } catch { /* the player is going away either way */ }
       if (p.ws) p.ws.close(4001, 'account deleted');
+      // another device that signed in separately has its own socket (and its own player object): close those too
+      for (const ws of wss.clients) if (ws.player && ws.player.id === playerId) ws.close(4001, 'account deleted');
+      for (const [tok, q] of tokens) if (q.id === playerId) tokens.delete(tok);
       clearTimeout(p.dropTimer);
       players.delete(playerId);
     },
@@ -193,6 +196,10 @@ function start(opts = {}) {
     try {
       rel = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     } catch {
+      // a malformed %-escape: an unknown player page is a plain 404 (as for any other name that does not exist); anything else is a bad request
+      let raw = '';
+      try { raw = new URL(req.url, 'http://x').pathname; } catch { /* keep empty */ }
+      if (raw.startsWith('/api/players/')) return sendJson(res, 404, { ok: false, error: 'No such player.' });
       res.writeHead(400);
       return res.end();
     }

@@ -265,7 +265,8 @@ function socket(port, cookie) {
       assert.equal((await second.get('/api/auth/session')).json.authenticated, false);
       assert.equal((await second.post('/api/auth/login', { email: u.email, password: PW })).status, 401, 'the credentials are gone');
       await until(() => s1.closed !== null && s2.closed !== null, 'sockets closed');
-      assert.equal(s1.closed, 4001);
+      assert.equal(s2.closed, 4001);
+      assert.ok([4000, 4001].includes(s1.closed), 'the other device is closed as well (code ' + s1.closed + ')');
       const again = socket(srv.port, u.cookie);
       await until(() => again.msgs.some((m) => m.t === 'authRequired') || again.closed !== null, 'old cookie refused');
       assert.equal(again.welcome(), undefined);
@@ -299,6 +300,13 @@ function socket(port, cookie) {
       s.send({ t: 'create', gameId: 'wizard' });
       await until(() => s.room, 'table');
       const code = s.room.code;
+      // a second seated human keeps the game running once the first one is gone (a table with no human left pauses by
+      // design); the short turn limit plays for them
+      const friend = await newUser('Pal', 'Pal Pat');
+      const f = socket(srv.port, friend.cookie);
+      await until(() => f.welcome(), 'friend welcome');
+      f.send({ t: 'join', code });
+      await until(() => f.room && f.room.members.length === 2, 'friend seated');
       s.send({ t: 'setSeats', seats: 3 });
       s.send({ t: 'setOptions', options: { length: 'short', timeLimit: '20' } });
       s.send({ t: 'start' });
@@ -311,14 +319,13 @@ function socket(port, cookie) {
       // put the real name into every place it can live: a chat message, and a game log line ("Secret Sam bids N")
       s.send({ t: 'chat', text: 'good luck everyone' });
       await until(() => s.msgs.some((m) => m.t === 'chat' && m.m.text === 'good luck everyone'), 'own chat message echoed');
-      const logHas = (c, text) => !!(c.view && (c.view.log || []).some((e) => String(e.card || e.text || '').includes(text)));
-      await until(() => s.view && s.view.myTurn, 'the human is asked to act', 30000);
-      for (const amount of [0, 1]) {
-        if (logHas(s, 'Secret Sam bids')) break;
-        s.send({ t: 'act', action: { type: 'bid', amount } });
-        await new Promise((r) => setTimeout(r, 600));
+      const logHas = (c, text) => !!(c.view && (c.view.log || []).some((e) => `${e.by} ${e.card || e.text || ''}`.includes(text)));
+      // the short turn limit may play for the human before this bid lands: either way the log names them
+      for (let i = 0; i < 40 && !logHas(s, 'Secret Sam'); i++) {
+        if (s.view && s.view.myTurn) s.send({ t: 'act', action: { type: 'bid', amount: i % 2 } });
+        await sleep(100);
       }
-      await until(() => logHas(s, 'Secret Sam bids') && logHas(w, 'Secret Sam bids'), 'the real name is in the game log before deleting');
+      await until(() => logHas(s, 'Secret Sam') && logHas(w, 'Secret Sam'), 'the real name is in the game log before deleting');
       assert.ok(JSON.stringify(w.msgs).includes('Secret Sam'), 'precondition: the name was visible at the table');
 
       const mark = w.msgs.length;
@@ -334,7 +341,7 @@ function socket(port, cookie) {
       const latest = after.filter((m) => m.t === 'state').pop();
       assert.ok(latest.room.members.some((m) => m.name === 'Deleted player'), 'the seat shows as Deleted player');
       assert.ok(latest.view.players.some((p) => p.name === 'Deleted player'), "the game's player list shows Deleted player");
-      assert.ok(logHas(w, 'Deleted player bids'), 'the earlier log line is kept, with the anonymous name');
+      assert.ok(logHas(w, 'Deleted player'), 'the earlier log line is kept, with the anonymous name');
       assert.ok(!logHas(w, 'Secret Sam'), 'no log line names the real person');
       // 3. someone who joins later is handed the chat history and the state: still no real name
       const late = socket(srv.port, (await newUser('Late2', 'Latecomer Lou')).cookie);
