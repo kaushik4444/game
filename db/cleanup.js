@@ -214,6 +214,7 @@ const SAMPLE_SQL = {
   auth_rate_limits: 'SELECT scope, left(key, 8) AS key_prefix, count, window_start FROM public."auth_rate_limits" ORDER BY window_start LIMIT $1',
   matches: 'SELECT id, game_id, room_code, seats, finished_at FROM public."matches" ORDER BY finished_at LIMIT $1',
   match_participants: 'SELECT match_id, player_name, seat, score, is_winner, is_bot, left_early, (player_id IS NOT NULL) AS has_account FROM public."match_participants" ORDER BY match_id, seat LIMIT $1',
+  player_recent_tables: 'SELECT player_id, room_code, game_id, last_seen_at FROM public."player_recent_tables" ORDER BY last_seen_at DESC LIMIT $1',
 };
 
 async function samples(client, n) {

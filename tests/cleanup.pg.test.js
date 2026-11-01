@@ -67,7 +67,7 @@ function cookieSocket(port, cookie) {
         const m = (await q("INSERT INTO matches (room_code, game_id, seats, match_key) VALUES ($1,$2,3, gen_random_uuid()) RETURNING id", ['ROOM' + key, game]))[0].id;
         await q("INSERT INTO match_participants (match_id, player_id, player_name, seat, score, is_winner, is_bot, left_early) VALUES ($1,$2,'Ada',0,50,TRUE,FALSE,FALSE), ($1,$3,'Guest1',1,20,FALSE,FALSE,TRUE), ($1,NULL,'Bot',2,10,FALSE,TRUE,FALSE), ($1,NULL,'Visitor',3,5,FALSE,FALSE,FALSE)", [m, reg[0], anon[0]]);
       }
-      return { players: 5, auth_identities: 2, auth_sessions: 4, auth_email_tokens: 2, auth_rate_limits: 3, matches: 3, match_participants: 12 };
+      return { players: 5, auth_identities: 2, auth_sessions: 4, auth_email_tokens: 2, auth_rate_limits: 3, matches: 3, match_participants: 12, player_recent_tables: 0 };
     }
     const SEEDED = { match_participants: 12, matches: 3, auth_email_tokens: 2, auth_sessions: 4, auth_identities: 2, player_recent_tables: 0, auth_rate_limits: 3, players: 5 };
 
@@ -223,7 +223,7 @@ function cookieSocket(port, cookie) {
 
       const after = await dump();
       assert.deepEqual(after.schema_migrations, before.schema_migrations, 'migration history is byte-identical');
-      assert.equal(after.schema_migrations.n, 4);
+      assert.equal(after.schema_migrations.n, 5);
       const fingerprintAfter = await cleanup.fingerprint(x);
       assert.equal(fingerprintAfter.structureDigest, fingerprintBefore.structureDigest, 'tables, columns, indexes, constraints unchanged');
       assert.equal(fingerprintAfter.migrationsDigest, fingerprintBefore.migrationsDigest);
