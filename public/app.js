@@ -254,7 +254,7 @@
       ` : `
         <form id="registerForm" class="auth-form">
           <input id="registerName" type="text" maxlength="20" required placeholder="Display name" autocomplete="nickname">
-          <input id="registerUsername" type="text" maxlength="24" required pattern="[a-z0-9_]{3,24}" placeholder="Username (lowercase)" autocomplete="username">
+          <input id="registerUsername" type="text" maxlength="24" required pattern="[a-z0-9_]{3,24}" placeholder="Username (lowercase)" autocomplete="username" autocapitalize="off" spellcheck="false">
           <small id="registerUsernameHint" class="hint"></small>
           <input id="registerEmail" type="email" required placeholder="Email" autocomplete="email">
           ${authPolicyHintHTML()}
@@ -272,6 +272,7 @@
       if (u) u.addEventListener('input', async () => {
         const hint = document.getElementById('registerUsernameHint');
         const value = String(u.value || '').trim().toLowerCase();
+        u.value = value;
         if (!hint) return;
         if (!value) { hint.textContent = ''; return; }
         if (!/^[a-z0-9_]{3,24}$/.test(value)) { hint.textContent = 'Use 3-24 chars: lowercase letters, numbers, underscore.'; return; }
@@ -642,7 +643,7 @@
     if (e.target.id === 'registerForm') {
       e.preventDefault();
       const name = (document.getElementById('registerName') || {}).value;
-      const username = (document.getElementById('registerUsername') || {}).value;
+      const username = String((document.getElementById('registerUsername') || {}).value || '').trim().toLowerCase();
       const email = (document.getElementById('registerEmail') || {}).value;
       const password = (document.getElementById('registerPassword') || {}).value;
       try {

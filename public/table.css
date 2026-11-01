@@ -1,9 +1,10 @@
 /* Wizard table. Card size comes from --cw (set by wizard.js). */
 .wz { --cw: 78px; min-height: 100dvh; max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; padding: calc(env(safe-area-inset-top) + 8px) 10px calc(env(safe-area-inset-bottom) + 8px); }
 .wz-top { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
-.wz-round, .wz-top > .row { flex: none; }
-.wz-top .row { flex-wrap: nowrap; }
-.wz-round { white-space: nowrap; }
+.wz-round { flex: none; white-space: nowrap; }
+.wz-top > .row { flex: 0 1 auto; min-width: 0; }
+.wz-top .row { flex-wrap: wrap; justify-content: flex-end; }
+.wz { overflow-x: hidden; }
 .wz-round b { font-family: var(--serif); font-size: 20px; }
 .wz-trump { flex: 1 1 0; min-width: 0; overflow: hidden; justify-content: center; max-width: 220px; display: flex; align-items: center; gap: 8px; margin: 0 auto; padding: 4px 12px 4px 6px; background: var(--panel); border: 1px solid var(--panel-line); border-radius: 12px; min-height: 40px; }
 .wz-trump .mini { --cw: 28px; }

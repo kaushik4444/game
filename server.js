@@ -579,11 +579,32 @@ function start(opts = {}) {
   }
 
   function addMember(room, p) {
+    const m = room.members.find((x) => x.id === p.id);
+    if (m) {
+      m.bot = false;
+      m.name = p.name;
+      m.avatar = p.avatar;
+      p.room = room.code;
+      return;
+    }
+    const s = room.spectators.findIndex((x) => x.id === p.id);
+    if (s >= 0) room.spectators.splice(s, 1);
     room.members.push({ id: p.id, name: p.name, avatar: p.avatar, bot: false });
     p.room = room.code;
   }
 
   function addSpectator(room, p) {
+    if (room.members.some((x) => x.id === p.id)) {
+      p.room = room.code;
+      return;
+    }
+    const s = room.spectators.find((x) => x.id === p.id);
+    if (s) {
+      s.name = p.name;
+      s.avatar = p.avatar;
+      p.room = room.code;
+      return;
+    }
     room.spectators.push({ id: p.id, name: p.name, avatar: p.avatar });
     p.room = room.code;
   }
@@ -926,19 +947,29 @@ function start(opts = {}) {
     if (!p) {
       const dbPlayer = await dbPlayers.authenticateToken(presentedToken);
       if (dbPlayer) {
-        p = {
-          id: dbPlayer.id,
-          token: presentedToken,
-          name: dbPlayer.display_name,
-          avatar: dbPlayer.avatar,
-          createdAt: dbPlayer.created_at,
-          room: null,
-          ws: null,
-          connected: false,
-          lastSeen: Date.now(),
-        };
-        players.set(p.id, p);
-        tokens.set(p.token, p);
+        const known = players.get(dbPlayer.id);
+        if (known) {
+          p = known;
+          p.token = presentedToken;
+          p.name = dbPlayer.display_name;
+          p.avatar = dbPlayer.avatar;
+          p.createdAt = dbPlayer.created_at;
+        } else {
+          p = {
+            id: dbPlayer.id,
+            token: presentedToken,
+            name: dbPlayer.display_name,
+            avatar: dbPlayer.avatar,
+            createdAt: dbPlayer.created_at,
+            room: null,
+            ws: null,
+            connected: false,
+            lastSeen: Date.now(),
+          };
+          players.set(p.id, p);
+        }
+        for (const [tok, who] of tokens) if (who.id === p.id && tok !== presentedToken) tokens.delete(tok);
+        tokens.set(presentedToken, p);
       }
     }
 
@@ -956,6 +987,12 @@ function start(opts = {}) {
     if (p.ws && p.ws !== ws) {
       p.ws.player = null;
       p.ws.close(4000, 'replaced');
+    }
+    for (const other of wss.clients) {
+      if (other !== ws && other.player && other.player.id === p.id) {
+        other.player = null;
+        other.close(4000, 'replaced');
+      }
     }
     p.ws = ws;
     p.connected = true;
