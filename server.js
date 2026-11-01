@@ -139,9 +139,15 @@ function start(opts = {}) {
     // a signed-out or reset account must not keep playing on an already open socket
     // Is this table code still open on this server? ('lobby' | 'playing' | null). Used to drop stale recent tables.
     tableStatus: (code) => { const r = rooms.get(code); return r ? r.status : null; },
-    onSignedOut: ({ playerId, token }) => {
-      const p = players.get(playerId);
-      if (p && p.ws && (!token || p.token === token)) p.ws.close(4001, 'signed out');
+    // Close this player's sockets that were opened with a session that no longer exists. `token` limits it to one
+    // session (logout); `exceptToken` spares the session that was just created (a new login retires the old ones, 4002).
+    onSignedOut: ({ playerId, token, exceptToken }) => {
+      for (const ws of wss.clients) {
+        if (!ws.player || ws.player.id !== playerId) continue;
+        if (token && ws.authToken !== token) continue;
+        if (exceptToken && ws.authToken === exceptToken) continue;
+        ws.close(exceptToken ? 4002 : 4001, exceptToken ? 'signed in elsewhere' : 'signed out');
+      }
     },
     // the display name was changed over HTTP (profile page): same effect as the lobby's own rename
     onProfileChanged: ({ playerId, displayName }) => {
@@ -998,6 +1004,7 @@ function start(opts = {}) {
       return ws.close(1008, 'email verification required');
     }
 
+    ws.authToken = presentedToken; // lets a sign-out or a newer login close exactly the sockets of that session
     if (p.ws && p.ws !== ws) {
       p.ws.player = null;
       p.ws.close(4000, 'replaced');

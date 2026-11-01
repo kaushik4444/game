@@ -392,6 +392,13 @@
         else openAuthSheet('login', 'You have been signed out. Please log in again.');
         return;
       }
+      if (e.code === 4002) { // a newer login (another device) took over the single active session
+        clearClientSession();
+        $banner.hidden = true;
+        loadSnapshot();
+        openAuthSheet('login', 'You signed in on another device, so this one was signed out. Log in again to play here.');
+        return;
+      }
       if (e.code === 1008) return; // refused (not logged in, not verified): the login sheet is already showing, do not loop
       $banner.textContent = 'Reconnecting…';
       $banner.hidden = false;
