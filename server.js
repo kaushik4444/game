@@ -88,6 +88,7 @@ function start(opts = {}) {
   const tokens = new Map(); // secret token -> player
   const rooms = new Map(); // code -> room
   let purgeTimer = null;
+  let spoolTimer = null;
 
   // ------------------------------------------------------------ http
   const readJsonBody = (req) =>
@@ -1154,6 +1155,7 @@ function start(opts = {}) {
     clearInterval(ticker);
     clearInterval(gc);
     clearInterval(purgeTimer);
+    clearInterval(spoolTimer);
     if (drainMs) await matchQueue.drain(drainMs); // let pending match writes finish (shutdown)
     matchQueue.close();
     for (const room of rooms.values()) clearTimeout(room.timer);
@@ -1167,6 +1169,9 @@ function start(opts = {}) {
     if (production && info && info.mode === 'postgres') emailSender.assertReady();
     if (info && info.mode === 'postgres') {
       matchQueue.replaySpool(); // results a previous run could not save
+      // a result whose retries ran out (database down for a while) is tried again every 10 minutes, not only at the next start
+      spoolTimer = setInterval(() => matchQueue.replaySpool(), 10 * 60 * 1000);
+      spoolTimer.unref();
       // old rate-limit rows, expired sessions and used tokens: once now, then every 6 hours (best effort)
       const purge = () => dbAuth.purgeExpired().catch((e) => (opts.log || console).error('[auth] housekeeping failed: ' + e.message));
       purge();

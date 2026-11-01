@@ -117,9 +117,14 @@ function createMatchQueue({ record, spoolDir = null, delays = DEFAULT_DELAYS, lo
   /** Never rejects and never throws: the caller is the game loop. */
   function enqueue(rec) {
     try {
-      if (closed) return Promise.resolve({ status: 'failed', attempts: 0, error: 'shutting down' });
       const key = rec.matchKey || require('crypto').randomUUID();
       if (!rec.matchKey) rec = { ...rec, matchKey: key };
+      if (closed) {
+        // a game that ends while the process is shutting down is not attempted, but it is not lost either: the next start replays it
+        spoolWrite(key, rec);
+        log.warn(`[matches] shutting down: ${summary(rec)} was kept in the spool for the next start`);
+        return Promise.resolve({ status: 'failed', attempts: 0, error: 'shutting down' });
+      }
       if (pending.has(key)) return pending.get(key); // same game queued twice in this process
       spoolWrite(key, rec);
       const p = run(rec, key).catch((e) => {
@@ -142,6 +147,7 @@ function createMatchQueue({ record, spoolDir = null, delays = DEFAULT_DELAYS, lo
     let n = 0;
     for (const f of files) {
       const key = f.slice(0, -5);
+      if (pending.has(key)) continue; // being written right now
       try {
         const rec = JSON.parse(fs.readFileSync(path.join(spoolDir, f), 'utf8'));
         if (!rec || !Array.isArray(rec.participants) || !rec.gameId) throw new Error('not a match record');
