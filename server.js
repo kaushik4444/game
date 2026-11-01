@@ -38,7 +38,7 @@ const SECURITY_HEADERS = {
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I / O
 const BOT_NAMES = ['Merlin', 'Morgana', 'Gandalf', 'Circe', 'Rincewind', 'Radagast', 'Elminster', 'Oz'];
 const MAX_ROOMS = 500;
-const MAX_SPECTATORS = 20;
+const DEFAULT_MAX_SPECTATORS = 20;
 const CHAT_KEEP = 60; // messages remembered per table
 const AVATARS = ['🧙', '🧝', '🧛', '🧞', '🦊', '🐺', '🦉', '🐉', '🦄', '🐙', '🐸', '🦁', '🐼', '🐯', '🦅', '🐲'];
 const EMOTES = ['👍', '👏', '😂', '😮', '😡', '🤔', '🔥', '😎'];
@@ -77,6 +77,7 @@ function start(opts = {}) {
       if (room && room.matchKey === rec.matchKey) sys(room, '⚠ The result of this game could not be saved right now, so it may be missing from stats.');
     },
   });
+  const MAX_SPECTATORS = opts.maxSpectators ?? DEFAULT_MAX_SPECTATORS; // tests lower it
   const timeScale = opts.timeScale ?? 1; // tests shrink the turn time limit with this
   // Optional site-wide notice (set the ANNOUNCEMENT env var, or pass opts.announcement); shown as a dismissible banner on the home screen
   const announcement = cleanText(opts.announcement ?? process.env.ANNOUNCEMENT ?? '');
@@ -697,7 +698,16 @@ function start(opts = {}) {
       applyProfile(p, msg);
       if (!room) return sendError(p, `No table with code ${code || '?'}`);
       const seat = room.members.find((m) => m.id === p.id);
-      if (p.room === code && ((seat && !seat.bot) || isSpec(room, p.id))) return broadcast(room);
+      // Already at this table (seated, or watching): nothing to add. This is decided BEFORE any capacity check, so a full
+      // table or a full spectator list never turns away someone who is already in it, and no second "joined/watching"
+      // line is written. A stale p.room that points elsewhere is repaired.
+      if ((seat && !seat.bot) || isSpec(room, p.id)) {
+        if (p.room === code) return broadcast(room);
+        if (p.room) leaveRoom(p);
+        p.room = code;
+        broadcast(room);
+        return sendChatLog(p, room);
+      }
       const wantsSpectate = msg.spectate === true;
       // Came back to a running game they left (a bot kept their seat): take the seat back, same player id.
       // This wins over "spectate": the home screen can only offer Spectate for a running game, and a player who
@@ -720,27 +730,21 @@ function start(opts = {}) {
       }
       if (room.status !== 'lobby') {
         // the game is already running: the newcomer watches
-        const alreadySpectating = isSpec(room, p.id);
-        if (!alreadySpectating && room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
+        if (room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
         if (p.room && p.room !== room.code) leaveRoom(p);
         addSpectator(room, p);
-        if (!alreadySpectating) {
-          sys(room, `👁 ${p.name} is watching`);
-          notifyOthers(room, p.id, `👁 ${p.name} is watching the game`);
-        }
+        sys(room, `👁 ${p.name} is watching`);
+        notifyOthers(room, p.id, `👁 ${p.name} is watching the game`);
         broadcast(room);
         sendChatLog(p, room);
         return;
       }
       if (wantsSpectate) {
-        const alreadySpectating = isSpec(room, p.id);
-        if (!alreadySpectating && room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
+        if (room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
         if (p.room && p.room !== room.code) leaveRoom(p);
         addSpectator(room, p);
-        if (!alreadySpectating) {
-          sys(room, `👁 ${p.name} is watching`);
-          notifyOthers(room, p.id, `👁 ${p.name} is watching the lobby`);
-        }
+        sys(room, `👁 ${p.name} is watching`);
+        notifyOthers(room, p.id, `👁 ${p.name} is watching the lobby`);
         broadcast(room);
         sendChatLog(p, room);
         return;
