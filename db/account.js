@@ -154,4 +154,9 @@ async function deleteAccount(playerId, password) {
   });
 }
 
-module.exports = { DELETED_NAME, RECENT_LIMIT, HISTORY_PAGE_SIZE, cleanDisplayName, getOwnProfile, updateDisplayName, getHistory, getPublicProfile, rememberTable, listRecentTables, forgetRecentTables, clearRecentTables, deleteAccount };
+async function updatePresence(playerId) {
+  if (!db.hasDatabase()) return;
+  await db.query('UPDATE players SET last_seen_at = NOW() WHERE id = $1', [playerId]);
+}
+
+module.exports = { DELETED_NAME, RECENT_LIMIT, HISTORY_PAGE_SIZE, cleanDisplayName, getOwnProfile, updateDisplayName, getHistory, getPublicProfile, rememberTable, listRecentTables, forgetRecentTables, clearRecentTables, deleteAccount, updatePresence };

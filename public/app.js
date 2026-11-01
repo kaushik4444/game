@@ -40,6 +40,17 @@
     announcement: '',
     dismissedAnnouncement: store.get('ct_ann'), // the text that was dismissed, so a changed announcement shows again
     recentTables: [], // the signed-in player's recent tables, from the server (follow the account across devices)
+    friends: [],
+    friendRequests: { incoming: [], outgoing: [] },
+    invitations: { incoming: [], outgoing: [] },
+    socialLoading: false,
+    socialError: '',
+    socialNotice: '',
+    friendSearch: [],
+    friendSearchBusy: false,
+    inviteFriendOptions: '',
+    friendQuery: '',
+    roomInviteSent: new Set(),
     page: 'home', // 'home' | 'profile' | 'player' (a public profile); the table and game screens take over while a room is open
     profile: null, // own profile page: { loading, error, data, tab, history }
     player: null, // a public profile page: { username, loading, error, data }
@@ -94,6 +105,7 @@
 
   const gameMeta = (id) => S.games.find((g) => g.id === id);
   const inviteUrl = () => `${location.origin}/#${S.room.code}`;
+  const safeTableUrl = () => S.room && S.room.visibility === 'public' ? inviteUrl() : `${location.origin}/`;
 
   // ------------------------------------------------------------ rules dialog
   function showRules(gameId) {
@@ -426,6 +438,100 @@
     } catch { /* offline: the list simply stays as it was */ }
   }
 
+  async function loadSocial({ quiet = false } = {}) {
+    if (!S.ready || S.guest) return;
+    if (!quiet) { S.socialLoading = true; S.socialError = ''; render(); }
+    try {
+      const paths = [
+      '/api/me/friends',
+      '/api/me/friend-requests?direction=incoming',
+      '/api/me/friend-requests?direction=outgoing',
+      '/api/me/table-invitations?direction=incoming',
+      '/api/me/table-invitations?direction=outgoing',
+    ];
+      const results = await Promise.all(paths.map(async (url) => {
+        const r = await fetch(url, { credentials: 'same-origin' });
+        const data = await r.json();
+        if (!r.ok || !data.ok) throw new Error(data.error || 'Could not load friends.');
+        return data;
+      }));
+      S.friends = results[0].friends || [];
+      S.friendRequests = { incoming: results[1].requests || [], outgoing: results[2].requests || [] };
+      S.invitations = { incoming: results[3].invitations || [], outgoing: results[4].invitations || [] };
+      S.socialError = '';
+    } catch (error) {
+      S.socialError = error.message || 'Could not load friends.';
+    } finally {
+      S.socialLoading = false;
+      if (!S.room) render();
+    }
+  }
+
+  async function searchFriends(query) {
+    S.friendQuery = query.trim();
+    if (S.friendQuery.length < 1) { S.friendSearch = []; render(); return; }
+    S.friendSearchBusy = true;
+    render();
+    try {
+      const r = await fetch(`/api/me/friends/search?username=${encodeURIComponent(S.friendQuery)}`, { credentials: 'same-origin' });
+      const data = await r.json();
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Search failed.');
+      S.friendSearch = data.players || [];
+      S.socialError = '';
+    } catch (error) { S.socialError = error.message || 'Search failed.'; }
+    finally { S.friendSearchBusy = false; if (!S.room) render(); }
+  }
+
+  async function socialPost(path, body, success) {
+    try {
+      await postJson(path, body);
+      S.socialError = '';
+      if (success) toast(success);
+      await loadSocial({ quiet: true });
+    } catch (error) {
+      S.socialError = error.message || 'Could not update friends.';
+      if (!S.room) render();
+    }
+  }
+
+  function joinAcceptedInvitation(invitation) {
+    if (!invitation || invitation.status !== 'accepted') return toast('Accept the invitation before joining.');
+    const game = gameMeta(invitation.game_id || invitation.gameId);
+    toast(`Joining ${(game && game.name) || 'private'} table…`);
+    joinTable(invitation.room_code || invitation.roomCode, 'join');
+  }
+
+  function socialHTML() {
+    if (S.guest) return '';
+    const friends = S.friends.map((f) => `<li class="social-row"><span class="social-avatar">${esc(f.avatar || '🧙')}</span><span class="social-info"><b>${esc(f.display_name || f.username)}</b><small>@${esc(f.username)} · ${f.online ? 'Online' : 'Last seen ' + (f.last_seen ? new Date(f.last_seen).toLocaleString() : 'unknown')}</small></span><button class="btn ghost small" data-act="removeFriend" data-id="${esc(f.id)}">Remove</button></li>`).join('');
+    const friendNames = new Set(S.friends.map((friend) => friend.username));
+    const requestNames = new Set([...S.friendRequests.incoming, ...S.friendRequests.outgoing].map((request) => request.username));
+    const invitationNames = new Set(S.invitations.incoming.map((invitation) => invitation.username));
+    const searchResults = S.friendSearch.filter((player) => !friendNames.has(player.username) && !requestNames.has(player.username) && !invitationNames.has(player.username));
+    const inviteTargets = S.friends.filter((friend) => !S.invitations.outgoing.some((invitation) => invitation.username === friend.username) && !S.roomInviteSent.has(`${S.room?.code}:${friend.username}`));
+    const resultHTML = searchResults.map((p) => `<li class="social-row"><span class="social-info"><b>${esc(p.display_name || p.username)}</b><small>@${esc(p.username)}</small></span><button class="btn small" data-act="sendFriend" data-username="${esc(p.username)}">Add friend</button></li>`).join('');
+    const tableInviteTargets = inviteTargets.map((f) => `<option value="${esc(f.username)}">${esc(f.display_name || f.username)} (@${esc(f.username)})</option>`).join('');
+    S.inviteFriendOptions = tableInviteTargets;
+    const incoming = S.friendRequests.incoming.map((r) => `<li class="social-row"><span class="social-info"><b>${esc(r.display_name || r.username)}</b><small>@${esc(r.username)} sent a friend request</small></span><button class="btn small" data-act="acceptFriend" data-id="${esc(r.id)}">Accept</button><button class="btn ghost small" data-act="declineFriend" data-id="${esc(r.id)}">Decline</button></li>`).join('');
+    const outgoing = S.friendRequests.outgoing.map((r) => `<li class="social-row"><span class="social-info"><b>${esc(r.display_name || r.username)}</b><small>Request pending</small></span><button class="btn ghost small" data-act="cancelFriend" data-id="${esc(r.id)}">Cancel</button></li>`).join('');
+    const invites = S.invitations.incoming.map((i) => `<li class="social-row"><span class="social-info"><b>${esc(i.display_name || i.username)}</b><small>${esc(i.game_id)} table · ${esc(i.room_code)} · expires ${esc(new Date(i.expires_at).toLocaleString())}</small></span><button class="btn small" data-act="acceptInvitation" data-id="${esc(i.id)}">Accept</button><button class="btn ghost small" data-act="declineInvitation" data-id="${esc(i.id)}">Decline</button></li>`).join('');
+    const sent = S.invitations.outgoing.map((i) => `<li class="social-row"><span class="social-info"><b>${esc(i.display_name || i.username)}</b><small>${esc(i.room_code)} · ${esc(i.status)}</small></span><button class="btn ghost small" data-act="revokeInvitation" data-id="${esc(i.id)}">Revoke</button></li>`).join('');
+    return `<section class="home-section social-panel" id="friends"><div class="row" style="justify-content:space-between"><h2 class="section">Friends</h2><button class="btn ghost small" data-act="refreshSocial">Refresh</button></div>
+      ${S.socialError ? `<p class="social-error" role="alert">${esc(S.socialError)}</p>` : ''}${S.socialNotice ? `<p class="social-notice" role="status">${esc(S.socialNotice)}</p>` : ''}${S.socialLoading ? '<p class="hint">Loading friends…</p>' : ''}
+      <form id="friendSearchForm" class="social-search"><label class="sr-only" for="friendSearch">Search by username</label><input id="friendSearch" minlength="1" maxlength="24" autocomplete="off" placeholder="Find someone by username" value="${esc(S.friendQuery)}"><button class="btn small" type="submit" ${S.friendSearchBusy ? 'disabled' : ''}>Search</button></form>
+      ${resultHTML ? `<ul class="social-list">${resultHTML}</ul>` : (S.friendQuery && !S.friendSearchBusy ? '<p class="hint">No new players found.</p>' : '')}
+      <h3>Friend requests</h3>${incoming || outgoing ? `<ul class="social-list">${incoming}${outgoing}</ul>` : '<p class="hint">No pending friend requests.</p>'}
+      <h3>Your friends</h3>${friends ? `<ul class="social-list">${friends}</ul>` : '<p class="hint">No friends yet. Search for a username to add someone.</p>'}
+      <h3>Table invitations</h3>${invites ? `<ul class="social-list">${invites}</ul>` : '<p class="hint">No pending invitations.</p>'}${sent ? `<details><summary>Sent invitations</summary><ul class="social-list">${sent}</ul></details>` : ''}
+    </section>`;
+  }
+
+  function inviteFriendsHTML() {
+    if (!S.room || S.room.visibility !== 'private' || S.room.hostId !== S.id || S.guest) return '';
+    const friends = S.inviteFriendOptions || '';
+    return `<form id="tableInviteForm" class="social-search"><label for="tableInviteFriend">Invite a friend to this private table</label><select id="tableInviteFriend" required>${friends || '<option value="">All friends already invited</option>'}</select><button class="btn small" type="submit" ${friends ? '' : 'disabled'}>Send invitation</button></form>`;
+  }
+
   function recentTablesHTML() {
     if (!S.recentTables.length) return '';
     const rows = S.recentTables.map((r) => {
@@ -557,6 +663,7 @@
         S.ready = true;
         render();
         loadRecent();
+        loadSocial({ quiet: true });
         if (!S.routed) { S.routed = true; applyRoute(); } // open #profile or #u/<name> if that is where the person came in
         const queue = S.pending;
         S.pending = [];
@@ -596,6 +703,20 @@
         break;
       case 'notice':
         toast(m.text);
+        break;
+      case 'socialNotice':
+        S.socialNotice = m.text || 'You have a new friends update.';
+        toast(S.socialNotice);
+        if (S.ready && !S.room) loadSocial({ quiet: true });
+        render();
+        break;
+      case 'socialPresence':
+        if (Array.isArray(m.friends)) S.friends = m.friends;
+        else {
+          const friend = S.friends.find((f) => f.id === m.playerId);
+          if (friend) { friend.online = Boolean(m.online); friend.last_seen = m.lastSeen || friend.last_seen; }
+        }
+        if (!S.room) render();
         break;
       case 'state': {
         S.room = m.room;
@@ -1252,6 +1373,7 @@
       ${rejoinBannerHTML()}
       ${S.announcement && S.dismissedAnnouncement !== S.announcement ? `<div class="notice-bar" role="status"><span>${esc(S.announcement)}</span><button type="button" class="wn-close" data-act="dismissAnnouncement" aria-label="Dismiss announcement">✕</button></div>` : ''}
       ${recentTablesHTML()}
+      ${socialHTML()}
       <section class="home-section" id="games">
         <h2 class="section">Games</h2>
         ${tiles ? `<div class="game-grid">${tiles}</div>` : loadingBlock('Loading games…')}
@@ -1323,7 +1445,8 @@
           <button class="btn small wa" data-act="whatsapp">WhatsApp</button>
           ${navigator.share ? '<button class="btn ghost small" data-act="share">Share…</button>' : ''}
         </div>
-        ${isHost ? `<div class="visibility-control"><span class="visibility-status ${r.visibility === 'public' ? 'public' : 'private'}">${r.visibility === 'public' ? '🌐 Public table' : '🔒 Private table'}</span><button class="btn ghost small" data-act="toggleVisibility">${r.visibility === 'public' ? 'Make private' : 'Make public'}</button><small>${r.visibility === 'public' ? 'Anyone can find this table in Sessions in Progress.' : 'Only people with the invite link or code can join.'}</small></div>` : ''}
+        ${isHost ? `<div class="visibility-control"><span class="visibility-status ${r.visibility === 'public' ? 'public' : 'private'}">${r.visibility === 'public' ? '🌐 Public table' : '🔒 Private table'}</span><button class="btn ghost small" data-act="toggleVisibility">${r.visibility === 'public' ? 'Make private' : 'Make public'}</button><small>${r.visibility === 'public' ? 'Anyone can find this table in Sessions in Progress.' : 'Only friends with an accepted invitation can join.'}</small></div>` : ''}
+        ${inviteFriendsHTML()}${r.visibility === 'public' ? '<small>Public table links and codes can be shared freely.</small>' : '<small>Private table links and codes are not access grants. Invite each friend above; they must accept first.</small>'}
       </section>
       <section class="panel">${profileHTML()}</section>
       <section class="panel">
@@ -1478,23 +1601,44 @@
       store.set('ct_ann', S.announcement);
       render();
     },
+    refreshSocial: () => loadSocial(),
+    sendFriend: (el) => socialPost('/api/me/friend-requests', { username: el.dataset.username }, 'Friend request sent.'),
+    acceptFriend: (el) => socialPost('/api/me/friend-requests/accept', { requestId: el.dataset.id }, 'Friend request accepted.'),
+    declineFriend: (el) => socialPost('/api/me/friend-requests/decline', { requestId: el.dataset.id }),
+    cancelFriend: (el) => socialPost('/api/me/friend-requests/cancel', { requestId: el.dataset.id }),
+    removeFriend: (el) => { if (confirm('Remove this friend? Pending invitations between you will be revoked.')) socialPost('/api/me/friends/remove', { friendId: el.dataset.id }, 'Friend removed.'); },
+    acceptInvitation: async (el) => {
+      try {
+        const out = await postJson('/api/me/table-invitations/accept', { invitationId: el.dataset.id });
+        await loadSocial({ quiet: true });
+        joinAcceptedInvitation(out.invitation);
+      } catch (error) { S.socialError = error.message || 'Could not accept invitation.'; render(); }
+    },
+    declineInvitation: (el) => socialPost('/api/me/table-invitations/decline', { invitationId: el.dataset.id }),
+    revokeInvitation: (el) => socialPost('/api/me/table-invitations/revoke', { invitationId: el.dataset.id }),
     logout: () => { S.menuOpen = false; doLogout(); },
     logoutAll: () => { S.menuOpen = false; doLogoutAll(); },
     copyLink: async () => {
+      const url = safeTableUrl();
       try {
-        await navigator.clipboard.writeText(inviteUrl());
-        toast('Invite link copied');
+        await navigator.clipboard.writeText(url);
+        toast(S.room.visibility === 'public' ? 'Table link copied' : 'Private code is not an access grant. Invite friends from the table.');
       } catch {
-        window.prompt('Copy this link:', inviteUrl());
+        window.prompt('Copy this link:', url);
       }
     },
     whatsapp: () => {
       const g = gameMeta(S.room.gameId);
-      const text = `Join my ${g ? g.name : 'card'} table on Tableverse: ${inviteUrl()} (code ${S.room.code})`;
+      const url = safeTableUrl();
+      const text = S.room.visibility === 'public'
+        ? `Join my ${g ? g.name : 'card'} table on Tableverse: ${url} (code ${S.room.code})`
+        : `Join my private ${g ? g.name : 'card'} table on Tableverse. I will send you a friend invitation in the app.`;
       window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
     },
     share: () => {
-      navigator.share({ title: 'Tableverse', text: `Join my table (code ${S.room.code})`, url: inviteUrl() }).catch(() => {});
+      const url = safeTableUrl();
+      const text = S.room.visibility === 'public' ? `Join my table (code ${S.room.code})` : 'I will send you a private table invitation in the app.';
+      navigator.share({ title: 'Tableverse', text, url }).catch(() => {});
     },
   };
 
@@ -1521,13 +1665,33 @@
       send({ t: 'setOptions', options });
     }
   });
-  $app.addEventListener('submit', (e) => {
+  $app.addEventListener('submit', async (e) => {
     if (e.target.id === 'joinForm') {
       e.preventDefault();
       if (S.draftCode.length !== 6) return toast('Enter the 6-letter table code');
       const code = S.draftCode;
       gateLogin(() => askJoinMode(code, tableByCode(code)));
+    } else if (e.target.id === 'friendSearchForm') {
+      e.preventDefault();
+      searchFriends(document.getElementById('friendSearch')?.value || '');
+    } else if (e.target.id === 'tableInviteForm') {
+      e.preventDefault();
+      const username = document.getElementById('tableInviteFriend')?.value;
+      if (!username || !S.room || S.room.visibility !== 'private') return;
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      try {
+        await postJson('/api/me/table-invitations', { username, gameId: S.room.gameId, roomCode: S.room.code, expiresAt });
+        S.roomInviteSent.add(`${S.room.code}:${username}`);
+        toast('Invitation sent.');
+        await loadSocial({ quiet: true });
+        render();
+      } catch (error) {
+        S.socialError = error.message || 'Could not send invitation.';
+        render();
+      }
     }
   });
+
+  setInterval(() => { if (S.ready && !S.room) loadSocial({ quiet: true }); }, 60000);
 
 })();

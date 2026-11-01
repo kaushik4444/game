@@ -16,6 +16,7 @@ const { makeAuthEmailSender } = require('./lib/email');
 const { createAuthRoutes } = require('./lib/authRoutes');
 const dbAccount = require('./db/account');
 const { DELETED_NAME } = dbAccount;
+const dbFriends = require('./db/friends');
 const { scrubText } = require('./games/scrub');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -87,6 +88,7 @@ function start(opts = {}) {
   const players = new Map(); // id -> player
   const tokens = new Map(); // secret token -> player
   const rooms = new Map(); // code -> room
+  const presence = new Map(); // player id -> { online, lastSeen }; best-effort and instance-local
   let purgeTimer = null;
   let spoolTimer = null;
 
@@ -141,6 +143,15 @@ function start(opts = {}) {
     // a signed-out or reset account must not keep playing on an already open socket
     // Is this table code still open on this server? ('lobby' | 'playing' | null). Used to drop stale recent tables.
     tableStatus: (code) => { const r = rooms.get(code); return r ? r.status : null; },
+    friendsContext: {
+      presence,
+      validateRoomInvite: async (inviterId, gameId, roomCode) => {
+        const room = rooms.get(roomCode);
+        const player = players.get(inviterId);
+        return Boolean(room && player && room.visibility === 'private' && room.status === 'lobby' && room.gameId === gameId && room.hostId === inviterId && player.room === roomCode);
+      },
+      onEvent: (event) => notifyAccount(event.playerId, event),
+    },
     // Close this player's sockets that were opened with a session that no longer exists. `token` limits it to one
     // session (logout); `exceptToken` spares the session that was just created (a new login retires the old ones, 4002).
     onSignedOut: ({ playerId, token, exceptToken }) => {
@@ -265,6 +276,41 @@ function start(opts = {}) {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
   };
   const sendError = (p, message) => send(p.ws, { t: 'error', message });
+  function notifyAccount(playerId, event) {
+    const recipient = players.get(playerId);
+    if (!recipient || !recipient.connected) return; // live-only; DB records remain authoritative
+    const message = event.type === 'friend-request'
+      ? { t: 'socialNotice', kind: event.type, text: 'You have a new friend request.' }
+      : { t: 'socialNotice', kind: event.type, text: 'You have a new private-table invitation.', invitationId: event.invitationId };
+    send(recipient.ws, message);
+  }
+  async function publishPresence(playerId) {
+    try {
+      const friends = await dbFriends.listFriends(playerId, presence);
+      const owner = players.get(playerId);
+      if (owner && owner.connected) send(owner.ws, { t: 'socialPresence', friends });
+      for (const friend of friends) {
+        const recipient = players.get(friend.id);
+        if (recipient && recipient.connected) send(recipient.ws, {
+          t: 'socialPresence', playerId,
+          online: Boolean(presence.get(playerId)?.online),
+          lastSeen: presence.get(playerId)?.lastSeen || null,
+        });
+      }
+    } catch (err) {
+      console.error('[server] presence update failed:', err.message);
+    }
+  }
+  async function canEnterRoom(p, room) {
+    if (room.visibility === 'public' || room.hostId === p.id) return true;
+    if (!dbPool.hasDatabase() || p.isAnonymous) return false;
+    try {
+      return await dbFriends.canJoinPrivateRoom(p.id, room.code, room.gameId, room.hostId);
+    } catch (err) {
+      console.error('[server] private room authorization failed:', err.message);
+      return false;
+    }
+  }
   const isConnected = (m) => m.bot || !!players.get(m.id)?.connected;
   const humans = (room) => room.members.filter((m) => !m.bot);
   const isSpec = (room, id) => room.spectators.some((s) => s.id === id);
@@ -488,6 +534,7 @@ function start(opts = {}) {
   function destroyRoom(room) {
     clearTimeout(room.timer);
     rooms.delete(room.code);
+    if (dbPool.hasDatabase()) dbFriends.expireClosedRoomInvitations(room.code).catch((err) => console.error('[server] invitation cleanup failed:', err.message));
     broadcastTables();
     for (const m of viewers(room)) {
       const p = players.get(m.id);
@@ -693,11 +740,12 @@ function start(opts = {}) {
       sendChatLog(p, room);
     },
 
-    join(p, msg) {
+    async join(p, msg) {
       const code = typeof msg.code === 'string' ? msg.code.trim().toUpperCase() : '';
       const room = rooms.get(code);
       applyProfile(p, msg);
       if (!room) return sendError(p, `No table with code ${code || '?'}`);
+      if (!await canEnterRoom(p, room)) return sendError(p, 'This private table requires an accepted invitation.');
       const seat = room.members.find((m) => m.id === p.id);
       // Already at this table (seated, or watching): nothing to add. This is decided BEFORE any capacity check, so a full
       // table or a full spectator list never turns away someone who is already in it, and no second "joined/watching"
@@ -759,9 +807,11 @@ function start(opts = {}) {
       sendChatLog(p, room);
     },
 
-    sit(p) {
+    async sit(p) {
       const room = rooms.get(p.room);
       if (!room || room.status !== 'lobby' || !isSpec(room, p.id)) return sendError(p, 'Not possible right now');
+      if (!await canEnterRoom(p, room)) return sendError(p, 'This private table requires an accepted invitation.');
+
       if (room.members.length >= room.seats) return sendError(p, 'There is no open seat');
       room.spectators.splice(room.spectators.findIndex((s) => s.id === p.id), 1);
       addMember(room, p);
@@ -971,6 +1021,7 @@ function start(opts = {}) {
           p.name = dbPlayer.display_name;
           p.avatar = dbPlayer.avatar;
           p.createdAt = dbPlayer.created_at;
+          p.isAnonymous = Boolean(dbPlayer.is_anonymous);
         } else {
           p = {
             id: dbPlayer.id,
@@ -978,6 +1029,7 @@ function start(opts = {}) {
             name: dbPlayer.display_name,
             avatar: dbPlayer.avatar,
             createdAt: dbPlayer.created_at,
+            isAnonymous: Boolean(dbPlayer.is_anonymous),
             room: null,
             ws: null,
             connected: false,
@@ -1026,7 +1078,7 @@ function start(opts = {}) {
     send(ws, { t: 'welcome', id: p.id, token: includeDebugTokens ? p.token : undefined, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables(), rejoin: rejoinFor(p), announcement });
     clearTimeout(p.dropTimer);
     const room = rooms.get(p.room);
-    if (room) {
+    if (room && await canEnterRoom(p, room)) {
       if (p.dropAnnounced) {
         p.dropAnnounced = false;
         sys(room, `📶 ${p.name} reconnected`);
@@ -1035,7 +1087,15 @@ function start(opts = {}) {
       broadcast(room);
       sendChatLog(p, room);
       schedule(room);
-    } else p.room = null;
+    } else {
+      if (room) {
+        p.room = null;
+        send(ws, { t: 'left' });
+        send(ws, { t: 'error', message: 'This private table requires an accepted invitation.' });
+      } else p.room = null;
+    }
+    presence.set(p.id, { online: true, lastSeen: presence.get(p.id)?.lastSeen || null });
+    publishPresence(p.id);
   }
 
   wss.on('connection', (ws, req) => {
@@ -1072,15 +1132,17 @@ function start(opts = {}) {
       }
       const p = ws.player;
       if (!p || !Object.hasOwn(handlers, msg.t)) return;
-      try {
-        const before = p.room;
-        handlers[msg.t](p, msg);
-        // remember a table only when this message really put the player at it (a refused join leaves p.room alone)
-        if (RECENT_ON.has(msg.t) && p.room && (p.room !== before || (msg.t === 'join' && String(msg.code || '').trim().toUpperCase() === p.room))) trackRecent(p);
-      } catch (e) {
-        console.error('handler error', msg.t, e);
-        sendError(p, 'Something went wrong');
-      }
+      const run = async () => {
+        try {
+          const before = p.room;
+          await handlers[msg.t](p, msg);
+          if (RECENT_ON.has(msg.t) && p.room && (p.room !== before || (msg.t === 'join' && String(msg.code || '').trim().toUpperCase() === p.room))) trackRecent(p);
+        } catch (e) {
+          console.error('handler error', msg.t, e);
+          sendError(p, 'Something went wrong');
+        }
+      };
+      run();
     });
     ws.on('close', () => {
       const p = ws.player;
@@ -1088,6 +1150,9 @@ function start(opts = {}) {
       p.ws = null;
       p.connected = false;
       p.lastSeen = Date.now();
+      presence.set(p.id, { online: false, lastSeen: new Date(p.lastSeen).toISOString() });
+      dbAccount.updatePresence(p.id).catch(() => {});
+      publishPresence(p.id);
       const room = rooms.get(p.room);
       if (room) {
         broadcast(room);

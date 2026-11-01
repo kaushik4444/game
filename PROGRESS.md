@@ -28,8 +28,10 @@ Never merge this branch into `main` from an agent session. Work in small stages:
 - Review fixes: SQL search retains the `[a-z0-9_]` input policy and uses parameterized SQL with LIKE escaping; tests reject `%` and backslash prefixes. Friend-request transitions acquire the canonical pair advisory lock before row locking. Invitation acceptance now shares that lock with friend removal and revalidates friendship before accepting. Added migration-007 concurrent application coverage and invitation/removal race coverage. Cleanup schema inventory now includes both participant FKs for each social table.
 - Verification: `node tests/production.test.js` (13 pass), `node tests/smoke.test.js` (pass), `npm run build` (pass), and `git diff --check` (pass). Full `npm run test:pg` passed against the disposable local PostgreSQL test databases with no skips: database/migration 30, PostgreSQL production 17, cleanup 13, account 10, match lifecycle 4, session 7, and friends/invitations 7 tests. The three-instance migration test confirms migrations 001–007 apply once and subsequent migration run is a no-op.
 - Test database: local endpoint `127.0.0.1:5432/postgres`; helper creates/drops random `tv_test_*` databases. User provided this as TEST_DATABASE_URL and it passed helper safety checks.
-- Commit `86055f3` (`Fix Stage 6.1 friendship invitation races`) pushed to `origin/feature/stage-6-friends-private-tables`; not merged into `main`.
+- Commit `bf1c387571fb6a2f2c0c4fd5e2267da5bf46bb61` (`Fix Stage 6.1 friendship invitation races`) pushed to `origin/feature/stage-6-friends-private-tables`; not merged into `main`.
 
-## Next steps
-1. Push the verified S6.1 commit on this branch; do not merge to `main`.
-2. Proceed to **S6.2 — Friends System** (finish search/request lifecycle/remove-friend behavior and dedicated authorization/duplicate testing; avoid duplicating the S6.1 API implementation).
+## Remaining Stage 6 work
+
+- **S6.2 — Friends System:** Complete any remaining friend-search/request/list/remove UX and authorization behavior without duplicating the existing backend. Audit actual shipped behavior and agree the exact scope before changes.
+- **S6.3–S6.5 — Private tables:** Stage 6.1 currently stores invitation metadata and lifecycle only; it does not authorize private-room joins, hide private rooms from public discovery, provide invite UX/share links, or handle related room lifecycle/presence. Define each remaining stage from the project roadmap, then implement in order with API, WebSocket, UI, and race/security tests.
+- Once scope is grounded, deliver each stage with focused and full test suites, accurate progress notes, and separate commits/pushes to this branch. Never merge to `main`; stop after Stage 6 for the requested review.

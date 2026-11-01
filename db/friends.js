@@ -51,16 +51,71 @@ async function searchPlayers(actorId, value) {
   return r.rows;
 }
 
-async function listFriends(playerId) {
+async function listFriends(playerId, presence = new Map()) {
   requireDb();
   const r = await db.query(
-    `SELECT p.id, p.username, p.display_name, p.avatar, f.created_at AS friends_since
+    `SELECT p.id, p.username, p.display_name, p.avatar, p.last_seen_at AS last_seen, f.created_at AS friends_since
      FROM friendships f
      JOIN players p ON p.id = CASE WHEN f.player_a_id = $1 THEN f.player_b_id ELSE f.player_a_id END
      WHERE f.player_a_id = $1 OR f.player_b_id = $1
      ORDER BY LOWER(p.username), p.id`, [playerId]
   );
-  return r.rows;
+  return r.rows.map((friend) => {
+    const status = presence.get(friend.id);
+    return { ...friend, online: Boolean(status && status.online), last_seen: status ? status.lastSeen : friend.last_seen };
+  });
+}
+
+async function hasFriendship(playerA, playerB) {
+  requireDb();
+  if (!playerA || !playerB || playerA === playerB) return false;
+  const [a, b] = canonicalPair(playerA, playerB);
+  const r = await db.query('SELECT 1 FROM friendships WHERE player_a_id = $1 AND player_b_id = $2', [a, b]);
+  return r.rows.length > 0;
+}
+
+async function canJoinPrivateRoom(playerId, roomCode, gameId, inviterId) {
+  requireDb();
+  const r = await db.query(
+    `SELECT 1
+     FROM private_table_invitations i
+     JOIN friendships f ON f.player_a_id = LEAST(i.inviter_id, i.invitee_id)
+                       AND f.player_b_id = GREATEST(i.inviter_id, i.invitee_id)
+     WHERE i.invitee_id = $1 AND i.room_code = $2 AND i.game_id = $3
+       AND i.inviter_id = $4 AND i.status = 'accepted' AND i.expires_at > NOW()`,
+    [playerId, roomCode, gameId, inviterId]
+  );
+  return r.rows.length > 0;
+}
+
+async function authorizedRoomInvitees(inviterId, roomCode, gameId) {
+  requireDb();
+  const r = await db.query(
+    `SELECT DISTINCT i.invitee_id
+     FROM private_table_invitations i
+     JOIN friendships f ON f.player_a_id = LEAST(i.inviter_id, i.invitee_id)
+                       AND f.player_b_id = GREATEST(i.inviter_id, i.invitee_id)
+     WHERE i.inviter_id = $1 AND i.room_code = $2 AND i.game_id = $3
+       AND i.status = 'accepted' AND i.expires_at > NOW()`,
+    [inviterId, roomCode, gameId]
+  );
+  return r.rows.map((row) => row.invitee_id);
+}
+
+async function expireInvitation(invitationId) {
+  requireDb();
+  await db.query(
+    `UPDATE private_table_invitations SET status = 'expired', updated_at = NOW()
+     WHERE id = $1 AND status IN ('pending', 'accepted') AND expires_at <= NOW()`, [invitationId]
+  );
+}
+
+async function expireClosedRoomInvitations(roomCode) {
+  requireDb();
+  await db.query(
+    `UPDATE private_table_invitations SET status = 'expired', updated_at = NOW()
+     WHERE room_code = $1 AND status IN ('pending', 'accepted')`, [roomCode]
+  );
 }
 
 async function listRequests(playerId, direction) {
@@ -122,7 +177,7 @@ async function transitionRequest(actorId, requestId, action) {
       const [a, b] = canonicalPair(row.requester_id, row.recipient_id);
       await client.query('INSERT INTO friendships (player_a_id, player_b_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [a, b]);
     }
-    return { id: requestId, status };
+    return { id: requestId, status, playerId: row.requester_id };
   });
 }
 
@@ -134,13 +189,17 @@ async function removeFriend(actorId, friendId) {
     await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${a}:${b}`]);
     const r = await client.query('DELETE FROM friendships WHERE player_a_id = $1 AND player_b_id = $2', [a, b]);
     if (!r.rowCount) throw new AuthError('Friend not found.', 404);
-    await client.query("UPDATE private_table_invitations SET status = 'revoked', updated_at = NOW() WHERE status = 'pending' AND ((inviter_id = $1 AND invitee_id = $2) OR (inviter_id = $2 AND invitee_id = $1))", [actorId, friendId]);
+    await client.query("UPDATE private_table_invitations SET status = 'revoked', updated_at = NOW() WHERE status IN ('pending', 'accepted') AND ((inviter_id = $1 AND invitee_id = $2) OR (inviter_id = $2 AND invitee_id = $1))", [actorId, friendId]);
     return true;
   });
 }
 
 async function listInvitations(playerId, direction) {
   requireDb();
+  await db.query(
+    `UPDATE private_table_invitations SET status = 'expired', updated_at = NOW()
+     WHERE (inviter_id = $1 OR invitee_id = $1) AND status IN ('pending', 'accepted') AND expires_at <= NOW()`, [playerId]
+  );
   const incoming = direction === 'incoming';
   const owner = incoming ? 'i.invitee_id' : 'i.inviter_id';
   const other = incoming ? 'i.inviter_id' : 'i.invitee_id';
@@ -148,17 +207,20 @@ async function listInvitations(playerId, direction) {
     `SELECT i.id, i.game_id, i.room_code, i.status, i.created_at, i.expires_at, i.updated_at,
             p.id AS player_id, p.username, p.display_name, p.avatar
      FROM private_table_invitations i JOIN players p ON p.id = ${other}
-     WHERE ${owner} = $1 AND i.status = 'pending' AND i.expires_at > NOW()
+     WHERE ${owner} = $1 AND i.status = 'pending' AND i.expires_at > NOW() AND EXISTS (
+       SELECT 1 FROM friendships f WHERE f.player_a_id = LEAST(i.inviter_id, i.invitee_id) AND f.player_b_id = GREATEST(i.inviter_id, i.invitee_id)
+     )
      ORDER BY i.created_at DESC LIMIT 100`, [playerId]
   );
   return r.rows;
 }
 
-async function createInvitation(actorId, inviteeUsername, game, code, expiresAt) {
+async function createInvitation(actorId, inviteeUsername, game, code, expiresAt, validateRoom) {
   requireDb();
   const username = validateUsername(inviteeUsername);
   const gameId = validateGameId(game);
   const roomCode = validateRoomCode(code);
+  if (typeof validateRoom === 'function' && !await validateRoom(actorId, gameId, roomCode)) throw new AuthError('Private table not found.', 404);
   const expires = new Date(expiresAt);
   if (!Number.isFinite(expires.getTime()) || expires <= new Date() || expires > new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)) badInput();
   const target = await db.query('SELECT id FROM players WHERE LOWER(username) = $1 AND is_anonymous = FALSE', [username]);
@@ -176,7 +238,7 @@ async function createInvitation(actorId, inviteeUsername, game, code, expiresAt)
          RETURNING id, game_id, room_code, status, created_at, expires_at`,
         [actorId, target.rows[0].id, gameId, roomCode, expires]
       );
-      return r.rows[0];
+      return { ...r.rows[0], playerId: target.rows[0].id };
     } catch (err) { mapConflict(err); }
   });
 }
@@ -217,6 +279,7 @@ async function transitionInvitation(actorId, invitationId, action) {
 
 module.exports = {
   USERNAME_RE, CODE_RE, STATUSES, validateUsername, validateRoomCode, validateGameId, validateId,
-  searchPlayers, listFriends, listRequests, sendRequest, transitionRequest, removeFriend,
+  searchPlayers, listFriends, hasFriendship, canJoinPrivateRoom, authorizedRoomInvitees,
+  expireInvitation, expireClosedRoomInvitations, listRequests, sendRequest, transitionRequest, removeFriend,
   listInvitations, createInvitation, transitionInvitation,
 };
