@@ -333,12 +333,14 @@ function cookieSocket(port, cookie) {
         await until(() => s.welcome(), 'optional verification welcome');
         s.ws.close();
 
-        // sensitive proof-of-email flow still requires verified status
+        // sensitive proof-of-email flow still requires verified status.
+        // Use a separate browser so creating another account does not replace b's verified session cookie.
+        const uv = new Browser(optional.port); await uv.csrf();
         const unverifiedEmail = `optional.unverified.${authSeq++}@test.local`;
-        const regUnverified = await b.post('/api/auth/register', { email: unverifiedEmail, username: `optuv${Date.now() % 1000000}`, password: PW, displayName: 'Optional UV' });
+        const regUnverified = await uv.post('/api/auth/register', { email: unverifiedEmail, username: `optuv${Date.now() % 1000000}`, password: PW, displayName: 'Optional UV' });
         assert.equal(regUnverified.status, 201);
         assert.equal(regUnverified.json.player.email_verified, false);
-        const forgot = await b.post('/api/auth/forgot-password', { email: unverifiedEmail });
+        const forgot = await uv.post('/api/auth/forgot-password', { email: unverifiedEmail });
         assert.equal(forgot.status, 200);
         assert.equal(forgot.json.debug, undefined, 'no reset token issued for unverified identity');
 
@@ -363,7 +365,9 @@ function cookieSocket(port, cookie) {
           await until(() => gateSock.msgs.some((m) => m.t === 'authRequired' && /verify/i.test(m.message || '')), 'required-mode websocket gate for unverified account');
           gateSock.ws.close();
 
-          await rb.must('/api/auth/verify-email', { token: rreg.json.debug.verifyToken });
+          const requiredVerify = requiredMail.sent.find((m) => m.kind === 'verify' && m.email === remail);
+          assert.ok(requiredVerify && requiredVerify.token, 'required-mode verification email includes a token');
+          await rb.must('/api/auth/verify-email', { token: requiredVerify.token });
           const reqSession = await rb.get('/api/auth/session');
           assert.equal(reqSession.json.emailVerified, true, 'required mode session updates after verification');
           const verifiedLogin = await rb.must('/api/auth/login', { email: remail, password: PW });
