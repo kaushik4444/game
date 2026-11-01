@@ -117,10 +117,17 @@ async function revokeAllSessionsForPlayer(playerId) {
   return { revoked: out.rowCount };
 }
 
+/**
+ * Single active session per account. The player row is locked first so two simultaneous logins queue up, every earlier
+ * session is revoked, and only then is the new one inserted. The partial unique index in migration 006 is the backstop:
+ * even a code path that forgets this cannot leave two active sessions.
+ */
 async function createSession(client, playerId) {
   const raw = newRawToken();
   const tokenHash = hashToken(raw);
   const ttlDays = sessionTtlDays();
+  await client.query('SELECT 1 FROM players WHERE id = $1 FOR UPDATE', [playerId]);
+  await client.query('UPDATE auth_sessions SET revoked_at = NOW() WHERE player_id = $1 AND revoked_at IS NULL', [playerId]);
   await client.query(
     'INSERT INTO auth_sessions (player_id, token_hash, expires_at) VALUES ($1, $2, NOW() + ($3::text || \' days\')::interval)',
     [playerId, tokenHash, String(ttlDays)]
@@ -223,7 +230,7 @@ async function loginEmail({ email, password }) {
   const row = r.rows[0];
   if (!(await verifyPassword(row.password_hash, password))) throw new AuthError('Invalid email or password.', 401);
 
-  return makeSessionResult(row, await createSession(db, row.id));
+  return makeSessionResult(row, await db.withTransaction((client) => createSession(client, row.id)));
 }
 
 async function resendVerification({ email }) {

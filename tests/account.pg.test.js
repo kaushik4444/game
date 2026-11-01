@@ -190,7 +190,8 @@ function socket(port, cookie) {
       assert.deepEqual(mine.map((x) => [x.code, x.gameId, x.status]), [[code, 'wizard', 'lobby']]);
       assert.deepEqual((await b.browser.get('/api/me/recent')).json.tables, [], 'another account sees nothing');
       const phone = new Browser(srv.port); await phone.csrf(); await phone.must('/api/auth/login', { email: a.email, password: PW });
-      assert.equal((await phone.get('/api/me/recent')).json.tables[0].code, code, 'a second device sees the same list');
+      assert.equal((await phone.get('/api/me/recent')).json.tables[0].code, code, 'the list follows the account to a new login');
+      a.browser = phone; // one active session per account: logging in on the phone signed the first browser out
 
       // a failed join does not bump or add anything
       const sb = socket(srv.port, b.cookie);
@@ -236,15 +237,18 @@ function socket(port, cookie) {
     await test('deleting removes the account, every session, tokens and recent tables, keeps and anonymises the match records, frees the username, and closes open sockets', async () => {
       const u = await newUser('Gone', 'Real Name Zed');
       const friend = await newUser('Friend', 'Friendly Fay');
+      // one active session per account: the second login signs the first device (and its socket) out
       const second = new Browser(srv.port); await second.csrf(); await second.must('/api/auth/login', { email: u.email, password: PW });
       const s1 = socket(srv.port, u.cookie); const s2 = socket(srv.port, second.cookieHeader);
-      await until(() => s1.welcome() && s2.welcome(), 'welcomes');
+      await until(() => s1.msgs.some((m) => m.t === 'authRequired') || s2.welcome(), 'the live session connects');
+      assert.equal(s1.welcome(), undefined, 'the retired session cannot connect');
+      await until(() => s2.welcome(), 'welcomes');
       await dbAccount.rememberTable(u.id, { code: 'OLD123', gameId: 'wizard' });
       await record({ roomCode: 'KEEP01', participants: [part(u.id, 'Real Name Zed', { seat: 0, isWinner: true }), part(friend.id, 'Friendly Fay', { seat: 1 }), part(null, 'Bot Bo', { seat: 2, isBot: true })] });
       const before = (await friend.browser.get('/api/me/profile')).json.stats;
       assert.equal((await q('SELECT count(*)::int AS n FROM auth_sessions WHERE player_id = $1', [u.id]))[0].n >= 2, true);
 
-      const del = await u.browser.post('/api/me/delete-account', { password: PW });
+      const del = await second.post('/api/me/delete-account', { password: PW });
       assert.equal(del.status, 200, JSON.stringify(del.json));
       assert.equal(del.json.matchesKept, 1);
       assert.match(del.setCookie.find((c) => c.startsWith('ct_session=')) || '', /Max-Age=0/, 'the session cookie is cleared');
@@ -266,7 +270,7 @@ function socket(port, cookie) {
       assert.equal((await second.post('/api/auth/login', { email: u.email, password: PW })).status, 401, 'the credentials are gone');
       await until(() => s1.closed !== null && s2.closed !== null, 'sockets closed');
       assert.equal(s2.closed, 4001);
-      assert.ok([4000, 4001].includes(s1.closed), 'the other device is closed as well (code ' + s1.closed + ')');
+      assert.equal(s1.closed, 1008, 'the retired session was refused at the door');
       const again = socket(srv.port, u.cookie);
       await until(() => again.msgs.some((m) => m.t === 'authRequired') || again.closed !== null, 'old cookie refused');
       assert.equal(again.welcome(), undefined);

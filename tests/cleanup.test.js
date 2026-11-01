@@ -75,7 +75,7 @@ test('a preserved table that references a table to be emptied is refused', () =>
 });
 test('migration history must match the repository exactly, both ways', () => {
   let f = healthy(); f.applied = f.applied.slice(0, -1);
-  refused(() => c.checkSchema(f), /not applied to this database: 005_/);
+  refused(() => c.checkSchema(f), /not applied to this database: 006_/);
   f = healthy(); f.applied = [...f.applied, '999_future.sql'];
   refused(() => c.checkSchema(f), /unknown to this code version: 999_future\.sql/);
 });

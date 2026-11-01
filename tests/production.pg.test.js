@@ -426,7 +426,10 @@ function cookieSocket(port, cookie) {
       const pid = u.player.id;
       const h = () => crypto.randomBytes(32).toString('hex');
       const [oldSess, legacy, fresh, oldTok] = [h(), h(), h(), h()];
-      await x.query("INSERT INTO auth_sessions (player_id, token_hash, expires_at) VALUES ($1,$2, NOW() - INTERVAL '10 days'), ($1,$3, NULL), ($1,$4, NOW() + INTERVAL '5 days')", [pid, oldSess, legacy, fresh]);
+      // one ACTIVE session per account (migration 006): retire the login's own, then add an expired+revoked one, the legacy
+      // active one without an expiry, and a recently revoked one that has not expired yet
+      await x.query('UPDATE auth_sessions SET revoked_at = NOW() WHERE player_id = $1 AND revoked_at IS NULL', [pid]);
+      await x.query("INSERT INTO auth_sessions (player_id, token_hash, expires_at, revoked_at) VALUES ($1,$2, NOW() - INTERVAL '10 days', NOW() - INTERVAL '40 days'), ($1,$3, NULL, NULL), ($1,$4, NOW() + INTERVAL '5 days', NOW())", [pid, oldSess, legacy, fresh]);
       await x.query("INSERT INTO auth_email_tokens (player_id, purpose, email, token_hash, expires_at) VALUES ($1,'verify_email','x@test.local',$2, NOW() - INTERVAL '10 days')", [pid, oldTok]);
       await x.query("INSERT INTO auth_rate_limits (scope, key, window_start, count) VALUES ('purge:test','old', NOW() - INTERVAL '2 days', 1), ('purge:test','new', NOW(), 1)");
       const out = await dbAuth.purgeExpired();

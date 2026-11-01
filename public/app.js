@@ -254,7 +254,7 @@
       ` : `
         <form id="registerForm" class="auth-form">
           <input id="registerName" type="text" maxlength="20" required placeholder="Display name" autocomplete="nickname">
-          <input id="registerUsername" type="text" maxlength="24" required pattern="[a-z0-9_]{3,24}" placeholder="Username (lowercase)" autocomplete="username">
+          <input id="registerUsername" type="text" maxlength="24" required pattern="[a-z0-9_]{3,24}" placeholder="Username (lowercase)" autocomplete="username" autocapitalize="off" spellcheck="false">
           <small id="registerUsernameHint" class="hint"></small>
           <input id="registerEmail" type="email" required placeholder="Email" autocomplete="email">
           ${authPolicyHintHTML()}
@@ -272,6 +272,7 @@
       if (u) u.addEventListener('input', async () => {
         const hint = document.getElementById('registerUsernameHint');
         const value = String(u.value || '').trim().toLowerCase();
+        u.value = value;
         if (!hint) return;
         if (!value) { hint.textContent = ''; return; }
         if (!/^[a-z0-9_]{3,24}$/.test(value)) { hint.textContent = 'Use 3-24 chars: lowercase letters, numbers, underscore.'; return; }
@@ -389,6 +390,13 @@
         loadSnapshot();
         if (S.signedOutIntentionally) S.signedOutIntentionally = false; // this tab clicked Log out: show the public home, do not nag
         else openAuthSheet('login', 'You have been signed out. Please log in again.');
+        return;
+      }
+      if (e.code === 4002) { // a newer login (another device) took over the single active session
+        clearClientSession();
+        $banner.hidden = true;
+        loadSnapshot();
+        openAuthSheet('login', 'You signed in on another device, so this one was signed out. Log in again to play here.');
         return;
       }
       if (e.code === 1008) return; // refused (not logged in, not verified): the login sheet is already showing, do not loop
@@ -642,7 +650,7 @@
     if (e.target.id === 'registerForm') {
       e.preventDefault();
       const name = (document.getElementById('registerName') || {}).value;
-      const username = (document.getElementById('registerUsername') || {}).value;
+      const username = String((document.getElementById('registerUsername') || {}).value || '').trim().toLowerCase();
       const email = (document.getElementById('registerEmail') || {}).value;
       const password = (document.getElementById('registerPassword') || {}).value;
       try {

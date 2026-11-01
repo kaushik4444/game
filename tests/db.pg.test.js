@@ -40,8 +40,9 @@ const matchOf = (over = {}) => ({ matchKey: uuid(), roomCode: 'ABCDEF', gameId: 
     await test('three instances starting at once apply every migration exactly once (advisory lock)', async () => {
       const results = await Promise.all([migrate(), migrate(), migrate()]);
       const applied = results.flatMap((r) => r.applied);
-      assert.deepEqual(applied.sort(), ['001_init.sql', '002_match_integrity.sql', '003_auth_accounts.sql', '004_auth_hardening.sql', '005_profiles_recent_tables.sql']);
-      assert.equal((await x.query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n, 5);
+      assert.deepEqual(applied.sort(), ['001_init.sql', '002_match_integrity.sql', '003_auth_accounts.sql', '004_auth_hardening.sql', '005_profiles_recent_tables.sql', '006_single_active_session.sql']);
+      const migrationCount = require('node:fs').readdirSync(path.join(__dirname, '..', 'db', 'migrations')).filter((f) => f.endsWith('.sql')).length;
+      assert.equal((await x.query('SELECT count(*)::int AS n FROM schema_migrations')).rows[0].n, migrationCount);
     });
     await test('running migrations again changes nothing', async () => {
       assert.deepEqual((await migrate()).applied, []);

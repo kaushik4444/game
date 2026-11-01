@@ -140,6 +140,39 @@ const files = (d) => fs.readdirSync(d).sort();
     assert.equal(r.status, 'failed');
     assert.equal(files(dir).length, 1);
     assert.equal((await q.enqueue(rec('22222222-2222-4222-8222-222222222222'))).status, 'failed', 'a closed queue refuses new work instead of hiding it');
+    assert.ok(files(dir).includes('22222222-2222-4222-8222-222222222222.json'), '...and keeps it in the spool so the next start can save it');
+  });
+  await test('a game that finishes during shutdown is replayed by the next process exactly once', async () => {
+    const dir = tmp();
+    const q1 = createMatchQueue({ record: async () => { throw new Error('must not be attempted after close'); }, spoolDir: dir, delays: [1], log: quiet() });
+    q1.close();
+    assert.equal((await q1.enqueue(rec())).error, 'shutting down');
+    const stored = new Map();
+    const record = async (r) => (stored.has(r.matchKey) ? { matchId: null, duplicate: true } : (stored.set(r.matchKey, r), { matchId: 'x' }));
+    const q2 = createMatchQueue({ record, spoolDir: dir, delays: [1], log: quiet() });
+    assert.equal(q2.replaySpool(), 1);
+    await q2.drain(1000);
+    assert.equal(stored.size, 1);
+    assert.equal(q2.replaySpool(), 0, 'nothing left to replay');
+  });
+  await test('replaying the spool while a write is in flight does not start a second write for the same game', async () => {
+    const dir = tmp(); let calls = 0; let release; const gate = new Promise((r) => (release = r));
+    const q = createMatchQueue({ record: async () => { calls++; await gate; return { matchId: 'x' }; }, spoolDir: dir, delays: [1], log: quiet() });
+    const p = q.enqueue(rec());
+    assert.equal(q.replaySpool(), 0, 'the periodic replay skips a record that is being written');
+    release(); await p;
+    assert.equal(calls, 1);
+  });
+  await test('a game that fails every retry is saved by a later replay once the database is back (the periodic replay)', async () => {
+    const dir = tmp(); let up = false; const stored = new Map();
+    const record = async (r) => { if (!up) throw dbErr('ECONNREFUSED'); stored.set(r.matchKey, r); return { matchId: 'x' }; };
+    const q = createMatchQueue({ record, spoolDir: dir, delays: [1, 1], log: quiet() });
+    assert.equal((await q.enqueue(rec())).status, 'failed');
+    up = true;
+    assert.equal(q.replaySpool(), 1);
+    await q.drain(1000);
+    assert.equal(stored.size, 1);
+    assert.deepEqual(files(dir), []);
   });
   await test('without a spool directory a failure is still logged and reported, and says the result is lost', async () => {
     const l = quiet();

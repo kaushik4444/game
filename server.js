@@ -38,7 +38,7 @@ const SECURITY_HEADERS = {
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I / O
 const BOT_NAMES = ['Merlin', 'Morgana', 'Gandalf', 'Circe', 'Rincewind', 'Radagast', 'Elminster', 'Oz'];
 const MAX_ROOMS = 500;
-const MAX_SPECTATORS = 20;
+const DEFAULT_MAX_SPECTATORS = 20;
 const CHAT_KEEP = 60; // messages remembered per table
 const AVATARS = ['🧙', '🧝', '🧛', '🧞', '🦊', '🐺', '🦉', '🐉', '🦄', '🐙', '🐸', '🦁', '🐼', '🐯', '🦅', '🐲'];
 const EMOTES = ['👍', '👏', '😂', '😮', '😡', '🤔', '🔥', '😎'];
@@ -77,6 +77,7 @@ function start(opts = {}) {
       if (room && room.matchKey === rec.matchKey) sys(room, '⚠ The result of this game could not be saved right now, so it may be missing from stats.');
     },
   });
+  const MAX_SPECTATORS = opts.maxSpectators ?? DEFAULT_MAX_SPECTATORS; // tests lower it
   const timeScale = opts.timeScale ?? 1; // tests shrink the turn time limit with this
   // Optional site-wide notice (set the ANNOUNCEMENT env var, or pass opts.announcement); shown as a dismissible banner on the home screen
   const announcement = cleanText(opts.announcement ?? process.env.ANNOUNCEMENT ?? '');
@@ -87,6 +88,7 @@ function start(opts = {}) {
   const tokens = new Map(); // secret token -> player
   const rooms = new Map(); // code -> room
   let purgeTimer = null;
+  let spoolTimer = null;
 
   // ------------------------------------------------------------ http
   const readJsonBody = (req) =>
@@ -139,9 +141,15 @@ function start(opts = {}) {
     // a signed-out or reset account must not keep playing on an already open socket
     // Is this table code still open on this server? ('lobby' | 'playing' | null). Used to drop stale recent tables.
     tableStatus: (code) => { const r = rooms.get(code); return r ? r.status : null; },
-    onSignedOut: ({ playerId, token }) => {
-      const p = players.get(playerId);
-      if (p && p.ws && (!token || p.token === token)) p.ws.close(4001, 'signed out');
+    // Close this player's sockets that were opened with a session that no longer exists. `token` limits it to one
+    // session (logout); `exceptToken` spares the session that was just created (a new login retires the old ones, 4002).
+    onSignedOut: ({ playerId, token, exceptToken }) => {
+      for (const ws of wss.clients) {
+        if (!ws.player || ws.player.id !== playerId) continue;
+        if (token && ws.authToken !== token) continue;
+        if (exceptToken && ws.authToken === exceptToken) continue;
+        ws.close(exceptToken ? 4002 : 4001, exceptToken ? 'signed in elsewhere' : 'signed out');
+      }
     },
     // the display name was changed over HTTP (profile page): same effect as the lobby's own rename
     onProfileChanged: ({ playerId, displayName }) => {
@@ -579,11 +587,32 @@ function start(opts = {}) {
   }
 
   function addMember(room, p) {
+    const m = room.members.find((x) => x.id === p.id);
+    if (m) {
+      m.bot = false;
+      m.name = p.name;
+      m.avatar = p.avatar;
+      p.room = room.code;
+      return;
+    }
+    const s = room.spectators.findIndex((x) => x.id === p.id);
+    if (s >= 0) room.spectators.splice(s, 1);
     room.members.push({ id: p.id, name: p.name, avatar: p.avatar, bot: false });
     p.room = room.code;
   }
 
   function addSpectator(room, p) {
+    if (room.members.some((x) => x.id === p.id)) {
+      p.room = room.code;
+      return;
+    }
+    const s = room.spectators.find((x) => x.id === p.id);
+    if (s) {
+      s.name = p.name;
+      s.avatar = p.avatar;
+      p.room = room.code;
+      return;
+    }
     room.spectators.push({ id: p.id, name: p.name, avatar: p.avatar });
     p.room = room.code;
   }
@@ -670,7 +699,16 @@ function start(opts = {}) {
       applyProfile(p, msg);
       if (!room) return sendError(p, `No table with code ${code || '?'}`);
       const seat = room.members.find((m) => m.id === p.id);
-      if (p.room === code && ((seat && !seat.bot) || isSpec(room, p.id))) return broadcast(room);
+      // Already at this table (seated, or watching): nothing to add. This is decided BEFORE any capacity check, so a full
+      // table or a full spectator list never turns away someone who is already in it, and no second "joined/watching"
+      // line is written. A stale p.room that points elsewhere is repaired.
+      if ((seat && !seat.bot) || isSpec(room, p.id)) {
+        if (p.room === code) return broadcast(room);
+        if (p.room) leaveRoom(p);
+        p.room = code;
+        broadcast(room);
+        return sendChatLog(p, room);
+      }
       const wantsSpectate = msg.spectate === true;
       // Came back to a running game they left (a bot kept their seat): take the seat back, same player id.
       // This wins over "spectate": the home screen can only offer Spectate for a running game, and a player who
@@ -694,7 +732,7 @@ function start(opts = {}) {
       if (room.status !== 'lobby') {
         // the game is already running: the newcomer watches
         if (room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
-        if (p.room) leaveRoom(p);
+        if (p.room && p.room !== room.code) leaveRoom(p);
         addSpectator(room, p);
         sys(room, `👁 ${p.name} is watching`);
         notifyOthers(room, p.id, `👁 ${p.name} is watching the game`);
@@ -704,7 +742,7 @@ function start(opts = {}) {
       }
       if (wantsSpectate) {
         if (room.spectators.length >= MAX_SPECTATORS) return sendError(p, 'Too many spectators at that table');
-        if (p.room) leaveRoom(p);
+        if (p.room && p.room !== room.code) leaveRoom(p);
         addSpectator(room, p);
         sys(room, `👁 ${p.name} is watching`);
         notifyOthers(room, p.id, `👁 ${p.name} is watching the lobby`);
@@ -926,19 +964,29 @@ function start(opts = {}) {
     if (!p) {
       const dbPlayer = await dbPlayers.authenticateToken(presentedToken);
       if (dbPlayer) {
-        p = {
-          id: dbPlayer.id,
-          token: presentedToken,
-          name: dbPlayer.display_name,
-          avatar: dbPlayer.avatar,
-          createdAt: dbPlayer.created_at,
-          room: null,
-          ws: null,
-          connected: false,
-          lastSeen: Date.now(),
-        };
-        players.set(p.id, p);
-        tokens.set(p.token, p);
+        const known = players.get(dbPlayer.id);
+        if (known) {
+          p = known;
+          p.token = presentedToken;
+          p.name = dbPlayer.display_name;
+          p.avatar = dbPlayer.avatar;
+          p.createdAt = dbPlayer.created_at;
+        } else {
+          p = {
+            id: dbPlayer.id,
+            token: presentedToken,
+            name: dbPlayer.display_name,
+            avatar: dbPlayer.avatar,
+            createdAt: dbPlayer.created_at,
+            room: null,
+            ws: null,
+            connected: false,
+            lastSeen: Date.now(),
+          };
+          players.set(p.id, p);
+        }
+        for (const [tok, who] of tokens) if (who.id === p.id && tok !== presentedToken) tokens.delete(tok);
+        tokens.set(presentedToken, p);
       }
     }
 
@@ -948,14 +996,29 @@ function start(opts = {}) {
     }
 
     const auth = await dbAuth.sessionInfo(p.token);
+    // A player may still be present in the in-memory token map after sign-out, password reset,
+    // or session revocation from another request/server instance. Never let that cache bypass
+    // the authoritative PostgreSQL session state.
+    if (dbPool.hasDatabase() && !auth.authenticated) {
+      tokens.delete(p.token);
+      send(ws, { t: 'authRequired', message: 'Your session is invalid or expired. Please log in again.' });
+      return ws.close(1008, 'invalid session');
+    }
     if (dbPool.hasDatabase() && dbAuth.isEmailVerificationRequired(env) && !auth.emailVerified) {
       send(ws, { t: 'authRequired', message: 'Please verify your email before entering the lobby.' });
       return ws.close(1008, 'email verification required');
     }
 
+    ws.authToken = presentedToken; // lets a sign-out or a newer login close exactly the sockets of that session
     if (p.ws && p.ws !== ws) {
       p.ws.player = null;
       p.ws.close(4000, 'replaced');
+    }
+    for (const other of wss.clients) {
+      if (other !== ws && other.player && other.player.id === p.id) {
+        other.player = null;
+        other.close(4000, 'replaced');
+      }
     }
     p.ws = ws;
     p.connected = true;
@@ -1092,6 +1155,7 @@ function start(opts = {}) {
     clearInterval(ticker);
     clearInterval(gc);
     clearInterval(purgeTimer);
+    clearInterval(spoolTimer);
     if (drainMs) await matchQueue.drain(drainMs); // let pending match writes finish (shutdown)
     matchQueue.close();
     for (const room of rooms.values()) clearTimeout(room.timer);
@@ -1105,6 +1169,9 @@ function start(opts = {}) {
     if (production && info && info.mode === 'postgres') emailSender.assertReady();
     if (info && info.mode === 'postgres') {
       matchQueue.replaySpool(); // results a previous run could not save
+      // a result whose retries ran out (database down for a while) is tried again every 10 minutes, not only at the next start
+      spoolTimer = setInterval(() => matchQueue.replaySpool(), 10 * 60 * 1000);
+      spoolTimer.unref();
       // old rate-limit rows, expired sessions and used tokens: once now, then every 6 hours (best effort)
       const purge = () => dbAuth.purgeExpired().catch((e) => (opts.log || console).error('[auth] housekeeping failed: ' + e.message));
       purge();

@@ -59,8 +59,7 @@ function cookieSocket(port, cookie) {
       for (const [name, user] of [['Ada', 'ada_x'], ['Bo', 'bo_y']]) reg.push((await q("INSERT INTO players (username, display_name, is_anonymous) VALUES ($1,$2,FALSE) RETURNING id", [user, name]))[0].id);
       for (const name of ['Guest1', 'Guest2', 'Guest3']) anon.push((await q("INSERT INTO players (display_name, is_anonymous) VALUES ($1, TRUE) RETURNING id", [name]))[0].id);
       await q("INSERT INTO auth_identities (player_id, provider, provider_user_id, email, password_hash, email_verified_at) VALUES ($1,'email','ada@example.com','ada@example.com','$argon2id$fake', NOW()), ($2,'email','bo@example.com','bo@example.com','$argon2id$fake', NULL)", reg);
-      await q("INSERT INTO auth_sessions (player_id, token_hash, expires_at) VALUES ($1, repeat('a',64), NOW() + INTERVAL '5 days'), ($1, repeat('b',64), NOW() - INTERVAL '1 day'), ($2, repeat('c',64), NULL), ($3, repeat('d',64), NULL)", [reg[0], anon[0], anon[1]]);
-      await q("UPDATE auth_sessions SET revoked_at = NOW() WHERE token_hash = repeat('b',64)");
+      await q("INSERT INTO auth_sessions (player_id, token_hash, expires_at, revoked_at) VALUES ($1, repeat('a',64), NOW() + INTERVAL '5 days', NULL), ($1, repeat('b',64), NOW() - INTERVAL '1 day', NOW()), ($2, repeat('c',64), NULL, NULL), ($3, repeat('d',64), NULL, NULL)", [reg[0], anon[0], anon[1]]);
       await q("INSERT INTO auth_email_tokens (player_id, purpose, email, token_hash, expires_at) VALUES ($1,'verify_email','bo@example.com', repeat('e',64), NOW() + INTERVAL '1 day'), ($1,'password_reset','bo@example.com', repeat('f',64), NOW() - INTERVAL '1 day')", [reg[1]]);
       await q("INSERT INTO auth_rate_limits (scope, key, window_start, count) VALUES ('auth:login:ip','k1',NOW(),3), ('auth:login:email','k2',NOW(),1), ('auth:register:ip','k3',NOW() - INTERVAL '3 days',9)");
       for (const [game, key] of [['wizard', 1], ['twentynine', 2], ['poker', 3]]) {
@@ -223,7 +222,7 @@ function cookieSocket(port, cookie) {
 
       const after = await dump();
       assert.deepEqual(after.schema_migrations, before.schema_migrations, 'migration history is byte-identical');
-      assert.equal(after.schema_migrations.n, 5);
+      assert.equal(after.schema_migrations.n, cleanup.repoMigrations().length);
       const fingerprintAfter = await cleanup.fingerprint(x);
       assert.equal(fingerprintAfter.structureDigest, fingerprintBefore.structureDigest, 'tables, columns, indexes, constraints unchanged');
       assert.equal(fingerprintAfter.migrationsDigest, fingerprintBefore.migrationsDigest);

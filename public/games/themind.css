@@ -2,13 +2,13 @@
 .tm { --cw: 64px; }
 .tm .wz-top { gap: 6px; }
 .tm .wz-top { justify-content: space-between; }
-.tm-sub { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
+.tm-sub { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; }
 .tm-sub > :last-child { justify-self: end; }
 .tm-lives { display: inline-flex; gap: 1px; font-size: 18px; flex-wrap: nowrap; }
 .tm-heart.lost { opacity: .45; filter: grayscale(.4); }
 .tm-stars { font-weight: 800; padding: 2px 9px; border-radius: 999px; background: rgba(255, 201, 77, .16); color: var(--gold); white-space: nowrap; }
-.tm-dots { display: flex; gap: 4px; justify-content: center; }
-.tm-dots i { width: 16px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .14); }
+.tm-dots { display: flex; gap: 4px; justify-content: center; min-width: 0; }
+.tm-dots i { flex: 0 1 16px; min-width: 3px; width: 16px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .14); }
 .tm-dots i.done { background: #35e0c2; }
 .tm-dots i.cur { background: var(--gold); box-shadow: 0 0 8px rgba(255, 201, 77, .7); }
 
