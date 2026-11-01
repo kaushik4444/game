@@ -65,6 +65,18 @@
     setTimeout(() => el.remove(), 3200);
   }
 
+  /**
+   * One line of a game log, the same for every game. Engines log { by, card }: Wizard writes whole sentences under
+   * "System" (the names are already inside), the other games put the actor in `by` and only the action in `card`
+   * ("played 12", "folds", "bids 16"). Showing `card` alone is what dropped the names.
+   */
+  const logLine = (e) => {
+    const text = String((e && (e.card || e.text)) || '').trim();
+    const by = String((e && e.by) || '').trim();
+    if (!by || by === 'System' || by === 'Table' || text.startsWith(by)) return text;
+    return `${by} ${text}`;
+  };
+
   const isSpectator = () => !!(S.room && (S.room.spectators || []).some((s) => s.id === S.id));
 
   window.CardTable = Object.assign(window.CardTable || {}, {
@@ -1249,7 +1261,7 @@
     const entries = (S.view && S.view.log) || [];
     const overlay = document.createElement('div');
     overlay.className = 'overlay activity-overlay';
-    overlay.innerHTML = `<div class="sheet activity-sheet" data-stop="1"><div class="row" style="justify-content:space-between"><h2>Game log</h2><button class="btn ghost small" data-log-close>Close</button></div>${entries.length ? `<ol class="activity-list">${entries.slice(-60).reverse().map((e) => `<li><span>${esc(e.card || e.text || '')}</span></li>`).join('')}</ol>` : '<p class="hint">No plays yet.</p>'}</div>`;
+    overlay.innerHTML = `<div class="sheet activity-sheet" data-stop="1"><div class="row" style="justify-content:space-between"><h2>Game log</h2><button class="btn ghost small" data-log-close>Close</button></div>${entries.length ? `<ol class="activity-list">${entries.slice(-60).reverse().map((e) => `<li><span>${esc(logLine(e))}</span></li>`).join('')}</ol>` : '<p class="hint">No plays yet.</p>'}</div>`;
     overlay.addEventListener('click', (e) => { if (e.target === overlay || e.target.closest('[data-log-close]')) overlay.remove(); });
     document.body.appendChild(overlay);
   }
@@ -1281,7 +1293,7 @@
     if (log.length) {
       const details = document.createElement('details');
       details.className = 'game-log-inline';
-      details.innerHTML = `<summary>📜 Game log <span>${S.view.log.length} plays</span></summary><ol>${log.map((e) => `<li><span>${esc(e.card || e.text || '')}</span></li>`).join('')}</ol>`;
+      details.innerHTML = `<summary>📜 Game log <span>${S.view.log.length} plays</span></summary><ol>${log.map((e) => `<li><span>${esc(logLine(e))}</span></li>`).join('')}</ol>`;
       $app.querySelector('.wz')?.appendChild(details);
     }
     const bar = $app.querySelector('.wz-status');
