@@ -17,7 +17,7 @@ Never merge this branch into `main` from an agent session. Work in small stages:
 
 ## Stage 6 progress
 
-### S6.1 — Database & Backend Foundation (in progress)
+### S6.1 — Database & Backend Foundation (verified)
 - Branch created from latest fetched `origin/main` at `aafd049` as `feature/stage-6-friends-private-tables`.
 - Added migration `007_friends_private_tables.sql` defining canonical friendships, constrained friend-request lifecycle, and private-table invitation metadata with FK cascades, uniqueness and lookup indexes.
 - Added `db/friends.js` persistence operations and authenticated endpoints under `/api/me/friends*`, `/api/me/friend-requests*`, and `/api/me/table-invitations*`; routing reuses cookie session auth, CSRF, error handling and rate limiting.
@@ -25,12 +25,11 @@ Never merge this branch into `main` from an agent session. Work in small stages:
 - Added `tests/friends.pg.test.js`; included it in package scripts/build syntax checks.
 - The opposite-direction request policy is auto-accept: a new request in response to an existing reverse pending request atomically accepts it and creates the friendship.
 - Known boundary: invitation APIs persist table metadata and invitation lifecycle only. They do not authorize room joins, generate shareable secret codes, create private rooms, send notifications, or provide presence/UI; those behaviors remain for S6.3–S6.5.
-- Review fixes: SQL search uses PostgreSQL `ESCAPE E'\\\\'` with matching literal prefix escaping; request transitions now acquire the canonical pair advisory lock before row locking. Added PostgreSQL coverage for literal LIKE metacharacters and request races with a bounded timeout.
-- Tests performed after fixes: `node tests/cleanup.test.js` (18 pass), `node tests/db.test.js` (pass), `node tests/production.test.js` (13 pass), `node tests/smoke.test.js` (pass), `npm run build` (pass), JS syntax checks and `git diff --check` (pass).
-- `node tests/friends.pg.test.js` prints SKIPPED because `TEST_DATABASE_URL` is not configured. `npm run test:pg` was blocked by the environment permission guard because no disposable local database target was established. PostgreSQL behavior and the new regression tests therefore remain unverified; do not treat the skipped suite as a pass.
-- Commit SHA: pending. Push: pending.
+- Review fixes: SQL search retains the `[a-z0-9_]` input policy and uses parameterized SQL with LIKE escaping; tests reject `%` and backslash prefixes. Friend-request transitions acquire the canonical pair advisory lock before row locking. Invitation acceptance now shares that lock with friend removal and revalidates friendship before accepting. Added migration-007 concurrent application coverage and invitation/removal race coverage. Cleanup schema inventory now includes both participant FKs for each social table.
+- Verification: `node tests/production.test.js` (13 pass), `node tests/smoke.test.js` (pass), `npm run build` (pass), and `git diff --check` (pass). Full `npm run test:pg` passed against the disposable local PostgreSQL test databases with no skips: database/migration 30, PostgreSQL production 17, cleanup 13, account 10, match lifecycle 4, session 7, and friends/invitations 7 tests. The three-instance migration test confirms migrations 001–007 apply once and subsequent migration run is a no-op.
+- Test database: local endpoint `127.0.0.1:5432/postgres`; helper creates/drops random `tv_test_*` databases. User provided this as TEST_DATABASE_URL and it passed helper safety checks.
+- Commit `86055f3` (`Fix Stage 6.1 friendship invitation races`) pushed to `origin/feature/stage-6-friends-private-tables`; not merged into `main`.
 
 ## Next steps
-1. Verify the Node build and run `npm run test:pg` against a throw-away local PostgreSQL DB; fix all failures (especially migration, account deletion cascades, cleanup fixture counts, and route state transitions).
-2. Review all changes, update this section with exact test results and the commit SHA, then commit and push S6.1 immediately.
-3. After the push, proceed to **S6.2 — Friends System** (finish search/request lifecycle/remove-friend behavior and dedicated authorization/duplicate testing; avoid duplicating the S6.1 API implementation).
+1. Push the verified S6.1 commit on this branch; do not merge to `main`.
+2. Proceed to **S6.2 — Friends System** (finish search/request lifecycle/remove-friend behavior and dedicated authorization/duplicate testing; avoid duplicating the S6.1 API implementation).

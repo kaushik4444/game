@@ -68,7 +68,7 @@ function cookieSocket(port, cookie) {
       }
       await q("INSERT INTO friendships (player_a_id, player_b_id) VALUES (LEAST($1::uuid, $2::uuid), GREATEST($1::uuid, $2::uuid))", reg);
       await q("INSERT INTO friend_requests (requester_id, recipient_id) VALUES ($1, $2)", reg);
-      await q("INSERT INTO private_table_invitations (inviter_id, invitee_id, game_id, room_code, expires_at) VALUES ($1, $2, 'wizard', 'ROOM99', NOW() + INTERVAL '1 day')", reg);
+      await q("INSERT INTO private_table_invitations (inviter_id, invitee_id, game_id, room_code, expires_at) VALUES ($1, $2, 'wizard', 'ABCDEF', NOW() + INTERVAL '1 day')", reg);
       return { players: 5, auth_identities: 2, auth_sessions: 4, auth_email_tokens: 2, auth_rate_limits: 3, matches: 3, match_participants: 12, player_recent_tables: 0, friendships: 1, friend_requests: 1, private_table_invitations: 1 };
     }
     const SEEDED = { match_participants: 12, private_table_invitations: 1, friend_requests: 1, friendships: 1, matches: 3, auth_email_tokens: 2, auth_sessions: 4, auth_identities: 2, player_recent_tables: 0, auth_rate_limits: 3, players: 5 };
@@ -256,12 +256,12 @@ function cookieSocket(port, cookie) {
       const snap = path.join(snapDir, 'pre.json');
       const dry = cli(['--snapshot=' + snap, '--sample=2']);
       assert.equal(dry.status, 0, dry.stdout + dry.stderr);
-      assert.match(dry.stdout, /would delete \d+ rows from 8 tables/);
+      assert.match(dry.stdout, /would delete \d+ rows from 11 tables/);
       const saved = JSON.parse(fs.readFileSync(snap, 'utf8'));
       assert.ok(saved.fingerprint.structureDigest && !JSON.stringify(saved).includes('ada@example.com'), 'the snapshot holds structure and counts, no user data');
       const run = cli(['--execute', `--confirm=${t.name}`, '--snapshot=' + snap]);
       assert.equal(run.status, 0, run.stdout + run.stderr);
-      assert.match(run.stdout, /COMMITTED\. Deleted \d+ rows from 8 tables/);
+      assert.match(run.stdout, /COMMITTED\. Deleted \d+ rows from 11 tables/);
       for (const tbl of cleanup.CLEAN_TABLES) assert.equal(await rows(tbl), 0);
       const ver = cli(['--verify', '--snapshot=' + snap]);
       assert.equal(ver.status, 0, ver.stdout + ver.stderr);

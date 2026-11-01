@@ -186,13 +186,33 @@ async function transitionInvitation(actorId, invitationId, action) {
   validateId(invitationId);
   const owner = action === 'revoke' ? 'inviter_id' : 'invitee_id';
   const status = action === 'revoke' ? 'revoked' : (action === 'accept' ? 'accepted' : 'declined');
-  const r = await db.query(
-    `UPDATE private_table_invitations SET status = $3, updated_at = NOW()
-     WHERE id = $1 AND ${owner} = $2 AND status = 'pending' AND expires_at > NOW()
-     RETURNING id, status`, [invitationId, actorId, status]
-  );
-  if (!r.rows.length) throw new AuthError('Invitation not found.', 404);
-  return r.rows[0];
+  return db.withTransaction(async (client) => {
+    const observed = await client.query(
+      `SELECT inviter_id, invitee_id FROM private_table_invitations
+       WHERE id = $1 AND ${owner} = $2 AND status = 'pending' AND expires_at > NOW()`, [invitationId, actorId]
+    );
+    if (!observed.rows.length) throw new AuthError('Invitation not found.', 404);
+    const [playerA, playerB] = canonicalPair(observed.rows[0].inviter_id, observed.rows[0].invitee_id);
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${playerA}:${playerB}`]);
+    const invitation = await client.query(
+      `SELECT id FROM private_table_invitations
+       WHERE id = $1 AND ${owner} = $2 AND status = 'pending' AND expires_at > NOW() FOR UPDATE`, [invitationId, actorId]
+    );
+    if (!invitation.rows.length) throw new AuthError('Invitation not found.', 404);
+    if (action === 'accept') {
+      const friendship = await client.query(
+        'SELECT 1 FROM friendships WHERE player_a_id = $1 AND player_b_id = $2 FOR UPDATE', [playerA, playerB]
+      );
+      if (!friendship.rows.length) throw new AuthError('Invitation not found.', 404);
+    }
+    const updated = await client.query(
+      `UPDATE private_table_invitations SET status = $3, updated_at = NOW()
+       WHERE id = $1 AND ${owner} = $2 AND status = 'pending' AND expires_at > NOW()
+       RETURNING id, status`, [invitationId, actorId, status]
+    );
+    if (!updated.rows.length) throw new AuthError('Invitation not found.', 404);
+    return updated.rows[0];
+  });
 }
 
 module.exports = {
