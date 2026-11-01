@@ -31,7 +31,7 @@ test('schema_migrations is preserved and is not in the delete list', () => {
 test('the delete order puts every table before the tables it references', () => {
   const fks = c.EXPECTED_FKS.map((f) => ({ ...f, name: `${f.child}_fk` }));
   assert.doesNotThrow(() => c.validateOrder(c.CLEAN_TABLES, fks));
-  assert.deepEqual(c.CLEAN_TABLES, ['match_participants', 'matches', 'auth_email_tokens', 'auth_sessions', 'auth_identities', 'auth_rate_limits', 'players']);
+  assert.deepEqual(c.CLEAN_TABLES, ['match_participants', 'matches', 'auth_email_tokens', 'auth_sessions', 'auth_identities', 'player_recent_tables', 'auth_rate_limits', 'players']);
   assert.equal(c.CLEAN_TABLES[c.CLEAN_TABLES.length - 1], 'players', 'accounts last: everything refers to them');
 });
 test('an order that deletes a parent before its child is refused', () => {

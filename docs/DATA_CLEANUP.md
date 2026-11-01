@@ -9,7 +9,7 @@ with `--execute` and the confirmation. The script was developed and tested only 
 
 ## 1. Every table in the database (discovered from `db/migrations/001` to `004`)
 
-There are 8 tables and 5 foreign keys. The script itself re-discovers the live schema on every run and **refuses** if it
+There are 9 tables and 6 foreign keys. The script itself re-discovers the live schema on every run and **refuses** if it
 finds a table or foreign key that is not in this list, a trigger, or a migration set that differs from this code version.
 
 | Table | What it stores | Action | Foreign keys | Delete order |
@@ -19,8 +19,9 @@ finds a table or foreign key that is not in this list, a trigger, or a migration
 | `auth_email_tokens` | Hashed single-use verification / password-reset tokens and the address they were sent to | **Empty** | `player_id` → `players` (CASCADE) | 3 |
 | `auth_sessions` | Hashed session tokens: registered **and legacy anonymous**, with expiry / revocation | **Empty** | `player_id` → `players` (CASCADE) | 4 |
 | `auth_identities` | Login methods: email, Argon2 password hash, verification time | **Empty** | `player_id` → `players` (CASCADE) | 5 |
-| `auth_rate_limits` | Hashed per-address / per-email rate-limit counters | **Empty** | none | 6 |
-| `players` | Accounts: registered players and **legacy anonymous players** | **Empty** | referenced by the four tables above | 7 (last) |
+| `player_recent_tables` | Recently visited table codes per account (migration 005) | **Empty** | `player_id` → `players` (CASCADE) | 6 |
+| `auth_rate_limits` | Hashed per-address / per-email rate-limit counters | **Empty** | none | 7 |
+| `players` | Accounts: registered players and **legacy anonymous players** | **Empty** | referenced by the four tables above | 8 (last) |
 | `schema_migrations` | Which migration files were applied | **PRESERVE, never touched** | none | not in the plan |
 
 Player statistics are not stored anywhere: they are computed from `matches` / `match_participants`, so emptying those
@@ -36,7 +37,7 @@ It never uses `TRUNCATE`, `DROP`, `ALTER`, `CREATE` or `CASCADE`.
 * **Dry run by default**: read-only transaction (`BEGIN READ ONLY`), always rolled back. Prints the row count of every table, breakdowns and a masked sample of the records.
 * **Two things are needed to delete**: `--execute` and `--confirm=<exact database name>`.
 * **The target is named on purpose**: `CLEANUP_DATABASE_URL` only. `DATABASE_URL` and `.env` files are ignored. A remote host must also be repeated with `--expect-host=<host>`. The connected `current_database()` must equal the URL's database. A running migration (advisory lock) blocks it.
-* **Expected state only**: same 8 tables, same 5 foreign keys, no triggers, no other schema, and exactly the migrations in `db/migrations` applied. Anything else is refused with the list of differences.
+* **Expected state only**: same 9 tables, same 6 foreign keys, no triggers, no other schema, and exactly the migrations in `db/migrations` applied. Anything else is refused with the list of differences.
 * **One transaction**: tables are locked (`SHARE ROW EXCLUSIVE`: readers keep working, writers wait), counted, deleted in the order above and checked; a schema and migration-history fingerprint taken before and after must be identical. Any error, mismatch or timeout rolls everything back (`lock_timeout` 10 s, `statement_timeout` 5 min).
 * **Nothing sensitive is printed**: emails are masked (`a***@example.com`), token hashes are never selected, the connection password is never shown, and the snapshot file holds only structure digests and counts.
 

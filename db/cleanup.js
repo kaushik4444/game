@@ -30,6 +30,7 @@ const PLAN = [
   { table: 'auth_email_tokens', stores: 'Hashed single-use email verification and password-reset tokens with the address they were sent to', references: ['players'] },
   { table: 'auth_sessions', stores: 'Hashed session tokens (registered and legacy anonymous), expiry and revocation', references: ['players'] },
   { table: 'auth_identities', stores: 'Login methods: email address, Argon2 password hash, verification time', references: ['players'] },
+  { table: 'player_recent_tables', stores: 'Recently visited table codes per account', references: ['players'] },
   { table: 'auth_rate_limits', stores: 'Hashed per-address / per-email rate-limit counters', references: [] },
   { table: 'players', stores: 'Accounts: registered players and legacy anonymous players (username, display name, avatar, timestamps)', references: [] },
 ];
@@ -44,6 +45,7 @@ const EXPECTED_FKS = [
   { child: 'auth_email_tokens', parent: 'players', onDelete: 'CASCADE' },
   { child: 'auth_identities', parent: 'players', onDelete: 'CASCADE' },
   { child: 'auth_sessions', parent: 'players', onDelete: 'CASCADE' },
+  { child: 'player_recent_tables', parent: 'players', onDelete: 'CASCADE' },
   { child: 'match_participants', parent: 'matches', onDelete: 'CASCADE' },
   { child: 'match_participants', parent: 'players', onDelete: 'SET NULL' },
 ];

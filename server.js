@@ -14,6 +14,7 @@ const dbMatches = require('./db/matches');
 const { createMatchQueue, defaultSpoolDir } = require('./db/matchQueue');
 const { makeAuthEmailSender } = require('./lib/email');
 const { createAuthRoutes } = require('./lib/authRoutes');
+const dbAccount = require('./db/account');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = {
@@ -118,6 +119,7 @@ function start(opts = {}) {
 
   const sendJson = (res, status, body) => {
     setCommonHeaders(res);
+    res.setHeader('Cache-Control', 'no-store'); // API answers can be personal: never cached by a browser or proxy
     res.writeHead(status);
     res.end(JSON.stringify(body));
   };
@@ -136,6 +138,28 @@ function start(opts = {}) {
     onSignedOut: ({ playerId, token }) => {
       const p = players.get(playerId);
       if (p && p.ws && (!token || p.token === token)) p.ws.close(4001, 'signed out');
+    },
+    // the display name was changed over HTTP (profile page): same effect as the lobby's own rename
+    onProfileChanged: ({ playerId, displayName }) => {
+      const p = players.get(playerId);
+      if (!p) return;
+      p.name = displayName;
+      const room = rooms.get(p.room);
+      if (!room) return;
+      const m = room.members.find((x) => x.id === p.id);
+      if (m && room.status !== 'playing') m.name = p.name; // a running game keeps the names it started with
+      const s = room.spectators.find((x) => x.id === p.id);
+      if (s) s.name = p.name;
+      broadcast(room);
+    },
+    // the account no longer exists: leave the table, close the socket, forget the player on this server
+    onAccountDeleted: ({ playerId }) => {
+      const p = players.get(playerId);
+      if (!p) return;
+      try { if (p.room) leaveRoom(p); } catch { /* the player is going away either way */ }
+      if (p.ws) p.ws.close(4001, 'account deleted');
+      clearTimeout(p.dropTimer);
+      players.delete(playerId);
     },
   });
 
@@ -512,6 +536,14 @@ function start(opts = {}) {
       broadcast(room);
     }, dropGraceMs);
     if (p.dropTimer.unref) p.dropTimer.unref();
+  }
+
+  // Tables a player sits at or watches are remembered on their account (shown as "Recent tables" on any device).
+  const RECENT_ON = new Set(['create', 'join', 'sit']);
+  function trackRecent(p) {
+    const room = rooms.get(p.room);
+    if (!room) return;
+    dbAccount.rememberTable(p.id, { code: room.code, gameId: room.gameId }).catch((e) => console.error('[server] recent table not saved:', e.message));
   }
 
   function addMember(room, p) {
@@ -947,6 +979,7 @@ function start(opts = {}) {
       if (!p || !Object.hasOwn(handlers, msg.t)) return;
       try {
         handlers[msg.t](p, msg);
+        if (RECENT_ON.has(msg.t) && p.room) trackRecent(p);
       } catch (e) {
         console.error('handler error', msg.t, e);
         sendError(p, 'Something went wrong');
