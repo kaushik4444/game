@@ -52,7 +52,7 @@
    */
   function tableHTML(opts) {
     const L = layout(opts.n, opts.me);
-    let out = '<div class="pt"><div class="pt-felt"></div>';
+    let out = `<div class="pt" data-n="${opts.n}"><div class="pt-felt"></div>`;
     if (opts.info) out += `<div class="pt-info">${opts.info}</div>`;
     if (opts.center) out += `<div class="pt-center">${opts.center}</div>`;
     if (opts.corner) out += `<div class="pt-corner">${opts.corner}</div>`;
