@@ -26,6 +26,9 @@ const path = require('path');
 /** Tables to empty, in the order they are deleted: every table appears before the tables it references. */
 const PLAN = [
   { table: 'match_participants', stores: 'Per-player result rows of finished games (name, seat, score, winner/bot/left-early flags, optional account id)', references: ['matches', 'players'] },
+  { table: 'private_table_invitations', stores: 'Private-table invitations and their lifecycle metadata', references: ['players'] },
+  { table: 'friend_requests', stores: 'Friend request participants and lifecycle status', references: ['players'] },
+  { table: 'friendships', stores: 'Accepted player relationships', references: ['players'] },
   { table: 'matches', stores: 'Finished games (game, room code, seats, options, time, idempotency key)', references: [] },
   { table: 'auth_email_tokens', stores: 'Hashed single-use email verification and password-reset tokens with the address they were sent to', references: ['players'] },
   { table: 'auth_sessions', stores: 'Hashed session tokens (registered and legacy anonymous), expiry and revocation', references: ['players'] },
@@ -46,6 +49,9 @@ const EXPECTED_FKS = [
   { child: 'auth_identities', parent: 'players', onDelete: 'CASCADE' },
   { child: 'auth_sessions', parent: 'players', onDelete: 'CASCADE' },
   { child: 'player_recent_tables', parent: 'players', onDelete: 'CASCADE' },
+  { child: 'friendships', parent: 'players', onDelete: 'CASCADE' },
+  { child: 'friend_requests', parent: 'players', onDelete: 'CASCADE' },
+  { child: 'private_table_invitations', parent: 'players', onDelete: 'CASCADE' },
   { child: 'match_participants', parent: 'matches', onDelete: 'CASCADE' },
   { child: 'match_participants', parent: 'players', onDelete: 'SET NULL' },
 ];
@@ -215,13 +221,19 @@ const SAMPLE_SQL = {
   matches: 'SELECT id, game_id, room_code, seats, finished_at FROM public."matches" ORDER BY finished_at LIMIT $1',
   match_participants: 'SELECT match_id, player_name, seat, score, is_winner, is_bot, left_early, (player_id IS NOT NULL) AS has_account FROM public."match_participants" ORDER BY match_id, seat LIMIT $1',
   player_recent_tables: 'SELECT player_id, room_code, game_id, last_seen_at FROM public."player_recent_tables" ORDER BY last_seen_at DESC LIMIT $1',
+  friendships: 'SELECT player_a_id, player_b_id, created_at FROM public."friendships" ORDER BY created_at DESC LIMIT $1',
+  friend_requests: 'SELECT requester_id, recipient_id, status, created_at, updated_at FROM public."friend_requests" ORDER BY created_at DESC LIMIT $1',
+  private_table_invitations: 'SELECT inviter_id, invitee_id, game_id, room_code, status, created_at, expires_at, updated_at FROM public."private_table_invitations" ORDER BY created_at DESC LIMIT $1',
 };
+
+// Table-specific samples are added as the new social tables are introduced; keep empty results useful and explicit.
 
 async function samples(client, n) {
   const out = {};
   if (!n) return out;
   for (const t of CLEAN_TABLES) {
-    const rows = (await client.query(SAMPLE_SQL[t], [n])).rows;
+    const sql = SAMPLE_SQL[t] || `SELECT * FROM public."${t}" LIMIT $1`;
+    const rows = (await client.query(sql, [n])).rows;
     out[t] = rows.map((r) => (r.email !== undefined ? { ...r, email: mask(r.email) } : r));
   }
   return out;

@@ -31,7 +31,7 @@ test('schema_migrations is preserved and is not in the delete list', () => {
 test('the delete order puts every table before the tables it references', () => {
   const fks = c.EXPECTED_FKS.map((f) => ({ ...f, name: `${f.child}_fk` }));
   assert.doesNotThrow(() => c.validateOrder(c.CLEAN_TABLES, fks));
-  assert.deepEqual(c.CLEAN_TABLES, ['match_participants', 'matches', 'auth_email_tokens', 'auth_sessions', 'auth_identities', 'player_recent_tables', 'auth_rate_limits', 'players']);
+  assert.deepEqual(c.CLEAN_TABLES, ['match_participants', 'private_table_invitations', 'friend_requests', 'friendships', 'matches', 'auth_email_tokens', 'auth_sessions', 'auth_identities', 'player_recent_tables', 'auth_rate_limits', 'players']);
   assert.equal(c.CLEAN_TABLES[c.CLEAN_TABLES.length - 1], 'players', 'accounts last: everything refers to them');
 });
 test('an order that deletes a parent before its child is refused', () => {
@@ -75,7 +75,7 @@ test('a preserved table that references a table to be emptied is refused', () =>
 });
 test('migration history must match the repository exactly, both ways', () => {
   let f = healthy(); f.applied = f.applied.slice(0, -1);
-  refused(() => c.checkSchema(f), /not applied to this database: 006_/);
+  refused(() => c.checkSchema(f), /not applied to this database: 007_/);
   f = healthy(); f.applied = [...f.applied, '999_future.sql'];
   refused(() => c.checkSchema(f), /unknown to this code version: 999_future\.sql/);
 });

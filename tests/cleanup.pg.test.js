@@ -66,9 +66,12 @@ function cookieSocket(port, cookie) {
         const m = (await q("INSERT INTO matches (room_code, game_id, seats, match_key) VALUES ($1,$2,3, gen_random_uuid()) RETURNING id", ['ROOM' + key, game]))[0].id;
         await q("INSERT INTO match_participants (match_id, player_id, player_name, seat, score, is_winner, is_bot, left_early) VALUES ($1,$2,'Ada',0,50,TRUE,FALSE,FALSE), ($1,$3,'Guest1',1,20,FALSE,FALSE,TRUE), ($1,NULL,'Bot',2,10,FALSE,TRUE,FALSE), ($1,NULL,'Visitor',3,5,FALSE,FALSE,FALSE)", [m, reg[0], anon[0]]);
       }
-      return { players: 5, auth_identities: 2, auth_sessions: 4, auth_email_tokens: 2, auth_rate_limits: 3, matches: 3, match_participants: 12, player_recent_tables: 0 };
+      await q("INSERT INTO friendships (player_a_id, player_b_id) VALUES (LEAST($1::uuid, $2::uuid), GREATEST($1::uuid, $2::uuid))", reg);
+      await q("INSERT INTO friend_requests (requester_id, recipient_id) VALUES ($1, $2)", reg);
+      await q("INSERT INTO private_table_invitations (inviter_id, invitee_id, game_id, room_code, expires_at) VALUES ($1, $2, 'wizard', 'ROOM99', NOW() + INTERVAL '1 day')", reg);
+      return { players: 5, auth_identities: 2, auth_sessions: 4, auth_email_tokens: 2, auth_rate_limits: 3, matches: 3, match_participants: 12, player_recent_tables: 0, friendships: 1, friend_requests: 1, private_table_invitations: 1 };
     }
-    const SEEDED = { match_participants: 12, matches: 3, auth_email_tokens: 2, auth_sessions: 4, auth_identities: 2, player_recent_tables: 0, auth_rate_limits: 3, players: 5 };
+    const SEEDED = { match_participants: 12, private_table_invitations: 1, friend_requests: 1, friendships: 1, matches: 3, auth_email_tokens: 2, auth_sessions: 4, auth_identities: 2, player_recent_tables: 0, auth_rate_limits: 3, players: 5 };
 
     /** The same database through the command line. NODE_PATH is passed on so a locally borrowed driver still resolves. */
     const cli = (args, url = t.url) => spawnSync(process.execPath, [path.join(__dirname, '..', 'scripts', 'cleanup-user-data.js'), ...args], { env: { PATH: process.env.PATH, NODE_PATH: process.env.NODE_PATH || '', CLEANUP_DATABASE_URL: url }, encoding: 'utf8', timeout: 60000 });
@@ -95,7 +98,7 @@ function cookieSocket(port, cookie) {
       assert.equal(report.mode, 'dry-run');
       assert.equal(report.committed, false);
       assert.deepEqual(report.before, SEEDED);
-      assert.equal(report.totalRows, 31);
+      assert.equal(report.totalRows, 34);
       assert.deepEqual(report.order, cleanup.CLEAN_TABLES);
       assert.deepEqual(report.preserved, ['schema_migrations']);
       assert.deepEqual(report.breakdowns.players, { anonymous: 3, registered: 2 });
@@ -106,7 +109,7 @@ function cookieSocket(port, cookie) {
       assert.deepEqual(writes, [], 'no write statement of any kind: ' + writes.join(' | '));
       const text = cleanup.formatReport(report);
       assert.match(text, /DRY RUN \(read-only; nothing will be changed\)/);
-      assert.match(text, /would delete 31 rows from 8 tables\. Nothing was changed/);
+      assert.match(text, /would delete 34 rows from 11 tables\. Nothing was changed/);
       assert.match(text, /3 legacy anonymous/);
       assert.ok(!text.includes('ada@example.com') && text.includes('a***@example.com'), 'emails are masked');
       assert.ok(!/a{64}|c{64}|e{64}/.test(text + JSON.stringify(report)), 'token hashes are never shown');
@@ -166,7 +169,7 @@ function cookieSocket(port, cookie) {
 
     await test('a deletion order that violates a foreign key is refused before anything is touched', async () => {
       const before = await dump();
-      for (const order of [[...cleanup.CLEAN_TABLES].reverse(), ['players', ...cleanup.CLEAN_TABLES.filter((x2) => x2 !== 'players')], ['matches', 'match_participants', 'auth_email_tokens', 'auth_sessions', 'auth_identities', 'auth_rate_limits', 'players']]) {
+      for (const order of [[...cleanup.CLEAN_TABLES].reverse(), ['players', ...cleanup.CLEAN_TABLES.filter((x2) => x2 !== 'players')], ['matches', 'match_participants', 'private_table_invitations', 'friend_requests', 'friendships', 'auth_email_tokens', 'auth_sessions', 'auth_identities', 'auth_rate_limits', 'players']]) {
         await assert.rejects(cleanup.run({ url: t.url, execute: true, confirm: t.name, order }), (e) => e instanceof cleanup.RefusedError && /unsafe deletion order/.test(e.message));
       }
       assert.deepEqual(await dump(), before);
@@ -175,7 +178,7 @@ function cookieSocket(port, cookie) {
     console.log('errors roll everything back');
     await test('an error after some tables were already deleted rolls the whole transaction back', async () => {
       const before = await dump();
-      for (const failAt of ['match_participants', 'matches', 'auth_sessions', 'auth_rate_limits']) {
+      for (const failAt of ['match_participants', 'private_table_invitations', 'friend_requests', 'friendships', 'matches', 'auth_sessions', 'auth_rate_limits']) {
         const err = await cleanup.run({ url: t.url, execute: true, confirm: t.name, hooks: { afterDelete: (tbl) => { if (tbl === failAt) throw new Error('injected failure after ' + tbl); } } }).then(() => null, (e) => e);
         assert.ok(err && /injected failure after/.test(err.message), 'failed at ' + failAt);
         assert.equal(err.report.rolledBack, true);
@@ -235,7 +238,7 @@ function cookieSocket(port, cookie) {
       const res = await cleanup.verify({ url: t.url, snapshot: { fingerprint: fp } });
       assert.equal(res.ok, true, JSON.stringify(res.checks.filter((c) => !c.ok)));
       const names = res.checks.map((c) => c.name).join('\n');
-      for (const needle of ['players is empty', 'no legacy anonymous players remain', 'migration history lists exactly', 'schema fingerprint equals the snapshot', 'schema_migrations is byte-identical', 'foreign key auth_sessions -> players', 'app: player stats query works', 'app: session lookup works']) assert.ok(names.includes(needle), needle);
+      for (const needle of ['players is empty', 'no legacy anonymous players remain', 'migration history lists exactly', 'schema fingerprint equals the snapshot', 'schema_migrations is byte-identical', 'foreign key auth_sessions -> players', 'foreign key friendships -> players', 'foreign key friend_requests -> players', 'foreign key private_table_invitations -> players', 'app: player stats query works', 'app: session lookup works']) assert.ok(names.includes(needle), needle);
     });
 
     await test('verification FAILS on a database that still holds data', async () => {
