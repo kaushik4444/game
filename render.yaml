@@ -29,5 +29,9 @@ services:
         sync: false # e.g. https://tableverse.onrender.com (used in email links, no trailing slash)
       - key: RESEND_API_KEY
         sync: false
+      # Temporary testing switch: set to "false" only when inviting friends before domain-based email delivery is ready.
+      # Missing or invalid values default to secure mode ("true").
+      - key: REQUIRE_EMAIL_VERIFICATION
+        value: "true"
       # Optional: where the match-result spool lives (put it on a persistent disk if you have one)
       # - key: MATCH_SPOOL_DIR
