@@ -16,6 +16,7 @@ const { makeAuthEmailSender } = require('./lib/email');
 const { createAuthRoutes } = require('./lib/authRoutes');
 const dbAccount = require('./db/account');
 const { DELETED_NAME } = dbAccount;
+const { scrubText } = require('./games/scrub');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MIME = {
@@ -161,11 +162,24 @@ function start(opts = {}) {
       if (!p) return;
       // The real name must not outlive the account anywhere: not in the table, its log or chat, and not in the match
       // record when the game finishes. Rename the seat everywhere first, then let the player leave (a bot keeps it).
+      // Every name this person went by at a table: the lobby name, the name a running game started with, a stale copy.
+      const oldNames = new Set([p.name]);
+      for (const room of rooms.values()) {
+        for (const m of [...room.members, ...room.spectators]) if (m.id === playerId) oldNames.add(m.name);
+      }
+      oldNames.delete(DELETED_NAME);
       p.name = DELETED_NAME;
       for (const room of rooms.values()) {
-        for (const m of [...room.members, ...room.spectators]) if (m.id === playerId) { m.name = DELETED_NAME; m.avatar = '🧙'; }
-        for (const gp of (room.game && room.game.players) || []) if (gp && gp.id === playerId) gp.name = DELETED_NAME;
-        for (const c of room.chat || []) if (c.id === playerId) { c.name = DELETED_NAME; c.avatar = '🧙'; }
+        const seated = [...room.members, ...room.spectators].filter((m) => m.id === playerId);
+        if (!seated.length && p.room !== room.code) continue;
+        for (const m of seated) { m.name = DELETED_NAME; m.avatar = '🧙'; }
+        // the game's own copy: players, every log line, trick records (the plugin owns its state)
+        if (room.game && typeof room.game.scrub === 'function') room.game.scrub([...oldNames], DELETED_NAME);
+        // chat: their messages, and every system line or message that mentions the name in plain text
+        for (const c of room.chat || []) {
+          if (c.id === playerId) { c.name = DELETED_NAME; c.avatar = '🧙'; }
+          if (typeof c.text === 'string') c.text = scrubText(c.text, [...oldNames], DELETED_NAME);
+        }
       }
       try { if (p.room) leaveRoom(p); } catch { /* the player is going away either way */ }
       if (p.ws) p.ws.close(4001, 'account deleted');

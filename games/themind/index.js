@@ -4,6 +4,7 @@
  * (so no time-limit option) and bots play on a rhythm, timed by botDelayMs().
  */
 const engine = require('./engine');
+const { scrubDeep } = require('../scrub');
 
 module.exports = {
   id: 'themind',
@@ -83,6 +84,8 @@ module.exports = {
     };
     return {
       view: (playerId) => engine.viewFor(g, playerId),
+      // an account was deleted: its name is rewritten everywhere in the state, including the log
+      scrub: (names, to) => scrubDeep([g, players], names, to),
       act: (playerId, action) => {
         try { return engine.applyAction(g, playerId, action); } catch (e) { return { ok: false, error: 'Invalid action' }; }
       },

@@ -308,13 +308,44 @@ function socket(port, cookie) {
       w.send({ t: 'join', code });
       await until(() => w.room, 'watching');
 
+      // put the real name into every place it can live: a chat message, and a game log line ("Secret Sam bids N")
+      s.send({ t: 'chat', text: 'good luck everyone' });
+      await until(() => s.msgs.some((m) => m.t === 'chat' && m.m.text === 'good luck everyone'), 'own chat message echoed');
+      const logHas = (c, text) => !!(c.view && (c.view.log || []).some((e) => String(e.card || e.text || '').includes(text)));
+      await until(() => s.view && s.view.myTurn, 'the human is asked to act', 30000);
+      for (const amount of [0, 1]) {
+        if (logHas(s, 'Secret Sam bids')) break;
+        s.send({ t: 'act', action: { type: 'bid', amount } });
+        await new Promise((r) => setTimeout(r, 600));
+      }
+      await until(() => logHas(s, 'Secret Sam bids') && logHas(w, 'Secret Sam bids'), 'the real name is in the game log before deleting');
+      assert.ok(JSON.stringify(w.msgs).includes('Secret Sam'), 'precondition: the name was visible at the table');
+
+      const mark = w.msgs.length;
       const del = await u.browser.post('/api/me/delete-account', { password: PW });
       assert.equal(del.status, 200, JSON.stringify(del.json));
       await until(() => s.closed === 4001, 'the deleted player\'s socket is closed');
-      await until(() => (w.room && JSON.stringify(w.room.members).includes('Deleted player')) || w.msgs.some((m) => JSON.stringify(m).includes('Deleted player')), 'the table shows the seat as Deleted player');
-      assert.ok(!JSON.stringify(w.msgs.slice(-5)).includes('Secret Sam') || true);
-      const latestRoom = w.msgs.filter((m) => m.t === 'state').pop().room;
-      assert.ok(!JSON.stringify(latestRoom).includes('Secret Sam'), 'the table no longer names the deleted player');
+      await until(() => w.msgs.slice(mark).some((m) => m.t === 'state'), 'a state broadcast after the deletion');
+
+      // 1. nothing sent to the watcher after the deletion carries the real name: state, log, players, notices, chat
+      const after = w.msgs.slice(mark);
+      assert.ok(!JSON.stringify(after).includes('Secret Sam'), 'a broadcast after the deletion still names the player');
+      // 2. the latest state: seat list, game players and the earlier log line are anonymised, not dropped
+      const latest = after.filter((m) => m.t === 'state').pop();
+      assert.ok(latest.room.members.some((m) => m.name === 'Deleted player'), 'the seat shows as Deleted player');
+      assert.ok(latest.view.players.some((p) => p.name === 'Deleted player'), "the game's player list shows Deleted player");
+      assert.ok(logHas(w, 'Deleted player bids'), 'the earlier log line is kept, with the anonymous name');
+      assert.ok(!logHas(w, 'Secret Sam'), 'no log line names the real person');
+      // 3. someone who joins later is handed the chat history and the state: still no real name
+      const late = socket(srv.port, (await newUser('Late2', 'Latecomer Lou')).cookie);
+      await until(() => late.welcome(), 'late welcome');
+      late.send({ t: 'join', code });
+      await until(() => late.msgs.some((m) => m.t === 'chatlog') && late.view, 'the history reaches a late joiner');
+      const history = late.msgs.find((m) => m.t === 'chatlog').messages;
+      assert.ok(!JSON.stringify(late.msgs).includes('Secret Sam'), 'the history handed to a new viewer names the deleted player');
+      assert.ok(history.some((c) => c.text === 'good luck everyone' && c.name === 'Deleted player'), 'their chat message stays, under the anonymous name');
+      assert.ok(history.some((c) => c.sys && c.text.includes('Deleted player')), 'system lines about them stay, anonymised');
+      late.ws.close();
       assert.equal((await q('SELECT count(*)::int AS n FROM players WHERE id = $1', [u.id]))[0].n, 0);
 
       const [match] = await until(async () => { const r = await q('SELECT id FROM matches WHERE room_code = $1', [code]); return r.length ? r : null; }, 'the game finished and was recorded', 60000);

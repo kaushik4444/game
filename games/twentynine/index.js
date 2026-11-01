@@ -1,5 +1,6 @@
 'use strict';
 const engine = require('./engine');
+const { scrubDeep } = require('../scrub');
 const { TIME_LIMIT_OPTION } = require('../common');
 
 module.exports = {
@@ -40,6 +41,8 @@ module.exports = {
     const g = engine.createGame(players, options, rng);
     return {
       view: (playerId) => engine.viewFor(g, playerId),
+      // an account was deleted: its name is rewritten everywhere in the state, including the log
+      scrub: (names, to) => scrubDeep([g, players], names, to),
       act: (playerId, action) => engine.applyAction(g, playerId, action),
       awaiting: () => engine.awaiting(g),
       botAction: (playerId) => engine.botAction(g, playerId),
