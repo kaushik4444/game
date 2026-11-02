@@ -437,3 +437,9 @@ html { scroll-behavior: auto; }
 .danger-zone small { display: block; color: var(--muted); margin-top: 3px; }
 @media (max-width: 480px) { .danger-zone, .setting-row { flex-wrap: wrap; } .pp-head .btn { width: 100%; } }
 .game-card .game-art { background: none; align-self: flex-start; border-radius: 0; }
+
+/* connection quality (ping) */
+.ping { font-variant-numeric: tabular-nums; font-weight: 600; padding: 1px 7px; border-radius: 999px; font-size: .92em; white-space: nowrap; background: rgba(255,255,255,.08); }
+.ping::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: currentColor; }
+.ping.q-great { color: #5fe0a0; } .ping.q-good { color: #a6e05f; } .ping.q-fair { color: #f2c14e; } .ping.q-poor { color: #ff7a6b; } .ping.none { color: var(--muted); }
+.pp-conn { margin: 4px 0 0; color: var(--muted); font-size: 14px; }

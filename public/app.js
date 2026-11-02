@@ -192,7 +192,7 @@
     S.email = '';
     S.id = null;
     store.set('ct_csrf', ''); // older versions kept it in localStorage
-    S.page = 'home'; S.profile = null; S.player = null; S.recentTables = []; // nothing of the old account stays on screen
+    S.ping = null; S.page = 'home'; S.profile = null; S.player = null; S.recentTables = []; // nothing of the old account stays on screen
     if (location.hash === '#profile') { try { history.replaceState(null, '', location.pathname + location.search); } catch { /* ignore */ } }
   }
 
@@ -503,7 +503,7 @@
 
   function socialHTML() {
     if (S.guest) return '';
-    const friends = S.friends.map((f) => `<li class="social-row"><span class="social-avatar">${esc(f.avatar || '🧙')}</span><span class="social-info"><b>${esc(f.display_name || f.username)}</b><small>@${esc(f.username)} · ${f.online ? (f.playing ? '🎮 Playing ' + esc((gameMeta(f.playing) || {}).name || f.playing) : '🟢 Online') : 'Last seen ' + (f.last_seen ? new Date(f.last_seen).toLocaleString() : 'unknown')}</small></span><button class="btn ghost small" data-act="removeFriend" data-id="${esc(f.id)}">Remove</button></li>`).join('');
+    const friends = S.friends.map((f) => `<li class="social-row"><span class="social-avatar">${esc(f.avatar || '🧙')}</span><span class="social-info"><b>${esc(f.display_name || f.username)}</b><small>@${esc(f.username)} · ${f.online ? (f.playing ? '🎮 Playing ' + esc((gameMeta(f.playing) || {}).name || f.playing) : '🟢 Online') + ' · ' + pingBadge(f.ping) : 'Last seen ' + (f.last_seen ? new Date(f.last_seen).toLocaleString() : 'unknown')}</small></span><button class="btn ghost small" data-act="removeFriend" data-id="${esc(f.id)}">Remove</button></li>`).join('');
     const friendNames = new Set(S.friends.map((friend) => friend.username));
     const requestNames = new Set([...S.friendRequests.incoming, ...S.friendRequests.outgoing].map((request) => request.username));
     const invitationNames = new Set(S.invitations.incoming.map((invitation) => invitation.username));
@@ -710,11 +710,15 @@
         if (S.ready && !S.room) loadSocial({ quiet: true });
         render();
         break;
+      case 'latency':
+        S.ping = Number.isFinite(m.ms) ? m.ms : null;
+        for (const el of document.querySelectorAll('[data-ping-self]')) el.outerHTML = pingBadge(S.ping, { label: el.dataset.label === '1', live: 'self' });
+        break;
       case 'socialPresence':
         if (Array.isArray(m.friends)) S.friends = m.friends;
         else {
           const friend = S.friends.find((f) => f.id === m.playerId);
-          if (friend) { friend.online = Boolean(m.online); friend.playing = m.playing || null; friend.last_seen = m.lastSeen || friend.last_seen; }
+          if (friend) { friend.online = Boolean(m.online); friend.playing = m.playing || null; friend.ping = Number.isFinite(m.ping) ? m.ping : null; friend.last_seen = m.lastSeen || friend.last_seen; }
         }
         if (!S.room) render();
         break;
@@ -1100,6 +1104,15 @@
 
   const joinedText = (iso) => (iso ? `Joined ${fmtDate(iso)}` : '');
 
+  /** Connection quality from a round-trip time in ms. Colour is never the only signal: the label is always there. */
+  const pingQuality = (ms) => (ms < 60 ? ['great', 'Excellent'] : ms < 120 ? ['good', 'Good'] : ms < 250 ? ['fair', 'Fair'] : ['poor', 'Poor']);
+  const pingBadge = (ms, { label = false, live = '' } = {}) => {
+    const attrs = `${live ? ` data-ping-${live}` : ''}${label ? ' data-label="1"' : ''}`;
+    if (!Number.isFinite(ms)) return `<span class="ping none"${attrs}>– ms</span>`;
+    const [cls, word] = pingQuality(ms);
+    return `<span class="ping q-${cls}" title="Round trip to the server: ${word}"${attrs}>${ms} ms${label ? ' · ' + word : ''}</span>`;
+  };
+
   function historyHTML(h) {
     if (!h || !h.total) return emptyState('🕘', 'No games yet', 'Finished games show up here with the game, the date and how it went.');
     const rows = h.items.map((g) => {
@@ -1130,13 +1143,21 @@
         : statsHTML(P.data.stats);
       inner = `<header class="pp-head">
           <span class="avatar big" style="background:${avatarColor(name)}">${me.avatar ? esc(me.avatar) : initial(name)}</span>
-          <div class="pp-id"><h1>${esc(name)}</h1><p>${me.username ? `@${esc(me.username)} · ` : ''}${esc(joinedText(me.joinedAt))}</p></div>
+          <div class="pp-id"><h1>${esc(name)}</h1><p>${me.username ? `@${esc(me.username)} · ` : ''}${esc(joinedText(me.joinedAt))}</p><p class="pp-conn">📶 Connection ${pingBadge(S.ping, { label: true, live: 'self' })}</p></div>
           <button type="button" class="btn ghost small" data-act="editProfile">Edit profile</button>
         </header>
         <div class="tabs" role="tablist">${tabBtn('overview', 'Overview')}${tabBtn('history', `History${P.history && P.history.total ? ` <small>${P.history.total}</small>` : ''}`)}${tabBtn('account', 'Account')}</div>
         <section class="tab-panel" role="tabpanel">${panel}</section>`;
     }
     $app.innerHTML = `${topbarHTML()}<main class="page profile-page"><a class="back-link" href="/" data-act="goHome">← Back to games</a>${inner}</main>`;
+  }
+
+  /** Only people you are friends with show their status and connection on their page (it comes from your own friends list). */
+  function friendLine(username) {
+    const f = (S.friends || []).find((x) => String(x.username).toLowerCase() === String(username).toLowerCase());
+    if (!f) return '';
+    if (!f.online) return '<p class="pp-conn">Friend · offline</p>';
+    return `<p class="pp-conn">Friend · ${f.playing ? '🎮 Playing ' + esc((gameMeta(f.playing) || {}).name || f.playing) : '🟢 Online'} · ${pingBadge(f.ping, { label: true })}</p>`;
   }
 
   function renderPlayerPage() {
@@ -1146,7 +1167,7 @@
     else if (P.error) inner = errorBlock(P.error);
     else {
       const d = P.data;
-      inner = `<header class="pp-head"><span class="avatar big" style="background:${avatarColor(d.displayName)}">${d.avatar ? esc(d.avatar) : initial(d.displayName)}</span><div class="pp-id"><h1>${esc(d.displayName)}</h1><p>@${esc(d.username)} · ${esc(joinedText(d.joinedAt))}</p></div></header>
+      inner = `<header class="pp-head"><span class="avatar big" style="background:${avatarColor(d.displayName)}">${d.avatar ? esc(d.avatar) : initial(d.displayName)}</span><div class="pp-id"><h1>${esc(d.displayName)}</h1><p>@${esc(d.username)} · ${esc(joinedText(d.joinedAt))}</p>${friendLine(d.username)}</div></header>
         <div class="stat-grid"><div class="stat-tile"><span class="stat-v">${d.played}</span><span class="stat-l">Games played</span></div><div class="stat-tile good"><span class="stat-v">${d.wins}</span><span class="stat-l">Wins</span></div><div class="stat-tile"><span class="stat-v">${d.winRate === null ? '–' : d.winRate + '%'}</span><span class="stat-l">Win rate</span></div></div>`;
     }
     $app.innerHTML = `${topbarHTML()}<main class="page profile-page"><a class="back-link" href="/" data-act="goHome">← Back to games</a>${inner}</main>`;

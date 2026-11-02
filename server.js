@@ -100,7 +100,7 @@ function start(opts = {}) {
     get: (id) => {
       const q = players.get(id);
       const online = Boolean(q && q.connected);
-      return { online, lastSeen: (presence.get(id) || {}).lastSeen || null, playing: online ? playingAt(id) : null };
+      return { online, lastSeen: (presence.get(id) || {}).lastSeen || null, playing: online ? playingAt(id) : null, ping: online && q ? q.pingMs ?? null : null };
     },
   };
   const presenceTimers = new Map();
@@ -171,7 +171,7 @@ function start(opts = {}) {
         const player = players.get(inviterId);
         return Boolean(room && player && room.visibility === 'private' && room.status === 'lobby' && room.gameId === gameId && room.hostId === inviterId && player.room === roomCode);
       },
-      onEvent: (event) => notifyAccount(event.playerId, event),
+      onEvent: (event) => (event.type === 'friend-removed' ? onFriendRemoved(event.playerId, event.friendId) : notifyAccount(event.playerId, event)),
     },
     // Close this player's sockets that were opened with a session that no longer exists. `token` limits it to one
     // session (logout); `exceptToken` spares the session that was just created (a new login retires the old ones, 4002).
@@ -300,10 +300,35 @@ function start(opts = {}) {
   function notifyAccount(playerId, event) {
     const recipient = players.get(playerId);
     if (!recipient || !recipient.connected) return; // live-only; DB records remain authoritative
-    const message = event.type === 'friend-request'
-      ? { t: 'socialNotice', kind: event.type, text: 'You have a new friend request.' }
-      : { t: 'socialNotice', kind: event.type, text: 'You have a new private-table invitation.', invitationId: event.invitationId };
-    send(recipient.ws, message);
+    const text = {
+      'friend-request': 'You have a new friend request.',
+      'friend-accepted': 'Your friend request was accepted.',
+      'table-invitation': 'You have a new private-table invitation.',
+    }[event.type];
+    if (!text) return;
+    send(recipient.ws, { t: 'socialNotice', kind: event.type, text, invitationId: event.invitationId });
+  }
+  /**
+   * A friendship ended. Private tables that are still gathering (lobby) lose the person who no longer has access: they
+   * are taken out with a notice. A game already under way is left alone (their seat is theirs until they leave), but
+   * they cannot come back to it once they have left.
+   */
+  function onFriendRemoved(a, b) {
+    for (const room of [...rooms.values()]) {
+      if (room.visibility !== 'private' || room.status !== 'lobby') continue;
+      for (const [host, guest] of [[a, b], [b, a]]) {
+        if (room.hostId !== host) continue;
+        const q = players.get(guest);
+        if (!q || q.room !== room.code) continue;
+        leaveRoom(q);
+        if (q.connected) {
+          send(q.ws, { t: 'left' });
+          send(q.ws, { t: 'notice', text: 'You are no longer friends with the host, so you left their private table.' });
+        }
+      }
+    }
+    publishPresence(a);
+    publishPresence(b);
   }
   async function publishPresence(playerId) {
     if (!dbPool.hasDatabase()) return; // friends exist only with PostgreSQL
@@ -318,6 +343,7 @@ function start(opts = {}) {
           online: presenceView.get(playerId).online,
           lastSeen: presenceView.get(playerId).lastSeen,
           playing: presenceView.get(playerId).playing,
+          ping: presenceView.get(playerId).ping,
         });
       }
     } catch (err) {
@@ -326,6 +352,8 @@ function start(opts = {}) {
   }
   async function canEnterRoom(p, room) {
     if (room.visibility === 'public' || room.hostId === p.id || (room.hosts && room.hosts.has(p.id))) return true;
+    // already seated or watching: access was checked when they came in; a reconnect must not strand their seat
+    if (room.members.some((m) => m.id === p.id && !m.bot) || room.spectators.some((x) => x.id === p.id)) return true;
     if (!dbPool.hasDatabase() || p.isAnonymous) return false;
     try {
       return await dbFriends.canJoinPrivateRoom(p.id, room.code, room.gameId, [...new Set([room.hostId, ...(room.hosts || [])])]);
@@ -335,6 +363,8 @@ function start(opts = {}) {
     }
   }
   const isConnected = (m) => m.bot || !!players.get(m.id)?.connected;
+  /** Smoothed round-trip time in ms of a connected human (null for bots and people who are offline or not measured yet). */
+  const pingOf = (m) => { if (m.bot) return null; const q = players.get(m.id); return q && q.connected && Number.isFinite(q.pingMs) ? q.pingMs : null; };
   const humans = (room) => room.members.filter((m) => !m.bot);
   const isSpec = (room, id) => room.spectators.some((s) => s.id === id);
   /** Everybody who should receive table updates: seated humans and spectators. */
@@ -354,8 +384,8 @@ function start(opts = {}) {
       min: def.seats.min,
       max: def.seats.max,
       seatLabels: def.seatLabel ? Array.from({ length: room.seats }, (_, i) => def.seatLabel(i, room.seats)) : null,
-      members: room.members.map((m) => ({ id: m.id, name: m.name, bot: m.bot, avatar: m.avatar, connected: isConnected(m) })),
-      spectators: room.spectators.map((s) => ({ id: s.id, name: s.name, avatar: s.avatar, connected: isConnected(s) })),
+      members: room.members.map((m) => ({ id: m.id, name: m.name, bot: m.bot, avatar: m.avatar, connected: isConnected(m), ping: pingOf(m) })),
+      spectators: room.spectators.map((s) => ({ id: s.id, name: s.name, avatar: s.avatar, connected: isConnected(s), ping: pingOf(s) })),
       deadline: room.status === 'playing' ? room.deadline : null, // epoch ms when the awaited human(s) get auto-played
       now: Date.now(), // lets clients correct for clock differences
     };
@@ -1103,6 +1133,7 @@ function start(opts = {}) {
     }
     p.ws = ws;
     p.connected = true;
+    p.pingMs = null; // measured again on this connection
     ws.player = p;
     send(ws, { t: 'welcome', id: p.id, token: includeDebugTokens ? p.token : undefined, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables(), rejoin: rejoinFor(p), announcement });
     clearTimeout(p.dropTimer);
@@ -1141,7 +1172,17 @@ function start(opts = {}) {
     ws.isAlive = true;
     ws.player = null;
     ws.msgs = 0;
-    ws.on('pong', () => (ws.isAlive = true));
+    ws.on('pong', (data) => {
+      ws.isAlive = true;
+      // a latency probe answers with the id it carried; the keep-alive ping has no payload
+      const tag = data && data.length ? String(data) : '';
+      if (tag === 'p' + ws.probeId && ws.probeSentAt && ws.player) {
+        const ms = Math.max(0, Math.min(9999, Date.now() - ws.probeSentAt));
+        const q = ws.player;
+        q.pingMs = Number.isFinite(q.pingMs) ? Math.round(q.pingMs * 0.6 + ms * 0.4) : ms; // smoothed: one slow packet does not look like a bad connection
+        send(ws, { t: 'latency', ms: q.pingMs });
+      }
+    });
     ws.on('message', (raw) => {
       if (++ws.msgs > maxMsgsPerSec) return ws.close(1008, 'slow down'); // flood guard; counter is reset every second
       let msg;
@@ -1203,6 +1244,11 @@ function start(opts = {}) {
   const ticker = setInterval(() => {
     for (const ws of wss.clients) {
       ws.msgs = 0;
+      if (ws.player && (!ws.probeSentAt || Date.now() - ws.probeSentAt >= 8000)) {
+        ws.probeId = (ws.probeId || 0) + 1;
+        ws.probeSentAt = Date.now();
+        try { ws.ping('p' + ws.probeId); } catch { /* the socket is closing */ }
+      }
       if (!ws.pingAt || Date.now() - ws.pingAt > 30000) {
         if (ws.isAlive === false) {
           ws.terminate();

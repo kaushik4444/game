@@ -62,7 +62,7 @@ async function listFriends(playerId, presence = new Map()) {
   );
   return r.rows.map((friend) => {
     const status = presence.get(friend.id);
-    return { ...friend, online: Boolean(status && status.online), playing: (status && status.online && status.playing) || null, last_seen: (status && status.lastSeen) || friend.last_seen };
+    return { ...friend, online: Boolean(status && status.online), playing: (status && status.online && status.playing) || null, ping: status && status.online && Number.isFinite(status.ping) ? status.ping : null, last_seen: (status && status.lastSeen) || friend.last_seen };
   });
 }
 
