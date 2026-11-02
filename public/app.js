@@ -40,6 +40,17 @@
     announcement: '',
     dismissedAnnouncement: store.get('ct_ann'), // the text that was dismissed, so a changed announcement shows again
     recentTables: [], // the signed-in player's recent tables, from the server (follow the account across devices)
+    friends: [],
+    friendRequests: { incoming: [], outgoing: [] },
+    invitations: { incoming: [], outgoing: [] },
+    socialLoading: false,
+    socialError: '',
+    socialNotice: '',
+    friendSearch: [],
+    friendSearchBusy: false,
+    inviteFriendOptions: '',
+    friendQuery: '',
+    roomInviteSent: new Set(),
     page: 'home', // 'home' | 'profile' | 'player' (a public profile); the table and game screens take over while a room is open
     profile: null, // own profile page: { loading, error, data, tab, history }
     player: null, // a public profile page: { username, loading, error, data }
@@ -94,6 +105,7 @@
 
   const gameMeta = (id) => S.games.find((g) => g.id === id);
   const inviteUrl = () => `${location.origin}/#${S.room.code}`;
+  const safeTableUrl = () => S.room && S.room.visibility === 'public' ? inviteUrl() : `${location.origin}/`;
 
   // ------------------------------------------------------------ rules dialog
   function showRules(gameId) {
@@ -151,6 +163,18 @@
     return data;
   }
 
+  /** Take the account the server returned into client state and remember it for the next visit. `fallback` is used when the server omits a field. */
+  function adoptPlayer(player, fallback = {}) {
+    S.name = player && player.display_name ? player.display_name : (fallback.name !== undefined ? fallback.name : S.name);
+    S.username = player && player.username ? player.username : (fallback.username !== undefined ? fallback.username : S.username);
+    S.avatar = player && player.avatar ? player.avatar : S.avatar;
+    S.email = player && player.email ? player.email : '';
+    S.named = !!S.name;
+    if (S.name) store.set('ct_name', S.name);
+    if (S.username) store.set('ct_username', S.username);
+    if (S.avatar) store.set('ct_avatar', S.avatar);
+  }
+
   async function hydrateSession() {
     try {
       const r = await fetch('/api/auth/session', { credentials: 'same-origin' });
@@ -158,15 +182,8 @@
       if (out && out.csrfToken) S.csrf = out.csrfToken;
       if (out && out.ok) S.requireEmailVerification = policyRequiresVerification(out); // secure default stays true when field is missing/invalid
       if (!out || !out.ok || !out.authenticated) return false;
-      S.name = out.player && out.player.display_name ? out.player.display_name : S.name;
-      S.username = out.player && out.player.username ? out.player.username : S.username;
-      S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
+      adoptPlayer(out.player);
       S.emailVerified = !!out.emailVerified;
-      S.email = out.player && out.player.email ? out.player.email : '';
-      S.named = !!S.name;
-      if (S.name) store.set('ct_name', S.name);
-      if (S.username) store.set('ct_username', S.username);
-      if (S.avatar) store.set('ct_avatar', S.avatar);
       return true;
     } catch {
       return false;
@@ -180,7 +197,7 @@
     S.email = '';
     S.id = null;
     store.set('ct_csrf', ''); // older versions kept it in localStorage
-    S.page = 'home'; S.profile = null; S.player = null; S.recentTables = []; // nothing of the old account stays on screen
+    S.ping = null; S.page = 'home'; S.profile = null; S.player = null; S.recentTables = []; // nothing of the old account stays on screen
     if (location.hash === '#profile') { try { history.replaceState(null, '', location.pathname + location.search); } catch { /* ignore */ } }
   }
 
@@ -294,17 +311,10 @@
     const out = await postJson('/api/auth/login', { email, password });
     S.token = '';
     if (out.csrfToken) S.csrf = out.csrfToken;
-    S.name = out.player && out.player.display_name ? out.player.display_name : S.name;
-    S.username = out.player && out.player.username ? out.player.username : S.username;
-    S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
-    S.email = out.player && out.player.email ? out.player.email : '';
-    S.named = !!S.name;
+    adoptPlayer(out.player);
     S.requireEmailVerification = policyRequiresVerification(out);
     S.emailVerified = !!(out.player && out.player.email_verified);
     S.signedOutIntentionally = false;
-    if (S.name) store.set('ct_name', S.name);
-    if (S.username) store.set('ct_username', S.username);
-    if (S.avatar) store.set('ct_avatar', S.avatar);
     if (S.requireEmailVerification && !S.emailVerified) {
       openAuthSheet('login', 'Please verify your email before playing. Use “Resend verification email” if the link did not arrive.');
       return;
@@ -318,17 +328,10 @@
     const out = await postJson('/api/auth/register', { displayName: name, username, email, password, avatar: S.avatar || undefined });
     S.token = '';
     if (out.csrfToken) S.csrf = out.csrfToken;
-    S.name = out.player && out.player.display_name ? out.player.display_name : name;
-    S.username = out.player && out.player.username ? out.player.username : String(username || '').toLowerCase();
-    S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
-    S.email = out.player && out.player.email ? out.player.email : '';
-    S.named = !!S.name;
+    adoptPlayer(out.player, { name, username: String(username || '').toLowerCase() });
     S.requireEmailVerification = policyRequiresVerification(out);
     S.emailVerified = !!(out.player && out.player.email_verified);
     S.signedOutIntentionally = false;
-    if (S.name) store.set('ct_name', S.name);
-    if (S.username) store.set('ct_username', S.username);
-    if (S.avatar) store.set('ct_avatar', S.avatar);
     if (out.requiresVerification) {
       openAuthSheet('login', out.emailSent === false
         ? 'Account created — but the verification email could not be sent. Use “Resend verification email”, then verify and log in.'
@@ -424,6 +427,100 @@
       S.recentTables = (out.tables || []).map((t) => ({ code: t.code, gameId: t.gameId, status: t.status, name: (gameMeta(t.gameId) || {}).name || t.gameId }));
       if (!S.room) render();
     } catch { /* offline: the list simply stays as it was */ }
+  }
+
+  async function loadSocial({ quiet = false } = {}) {
+    if (!S.ready || S.guest) return;
+    if (!quiet) { S.socialLoading = true; S.socialError = ''; render(); }
+    try {
+      const paths = [
+      '/api/me/friends',
+      '/api/me/friend-requests?direction=incoming',
+      '/api/me/friend-requests?direction=outgoing',
+      '/api/me/table-invitations?direction=incoming',
+      '/api/me/table-invitations?direction=outgoing',
+    ];
+      const results = await Promise.all(paths.map(async (url) => {
+        const r = await fetch(url, { credentials: 'same-origin' });
+        const data = await r.json();
+        if (!r.ok || !data.ok) throw new Error(data.error || 'Could not load friends.');
+        return data;
+      }));
+      S.friends = results[0].friends || [];
+      S.friendRequests = { incoming: results[1].requests || [], outgoing: results[2].requests || [] };
+      S.invitations = { incoming: results[3].invitations || [], outgoing: results[4].invitations || [] };
+      S.socialError = '';
+    } catch (error) {
+      S.socialError = error.message || 'Could not load friends.';
+    } finally {
+      S.socialLoading = false;
+      if (!S.room) render();
+    }
+  }
+
+  async function searchFriends(query) {
+    S.friendQuery = query.trim();
+    if (S.friendQuery.length < 1) { S.friendSearch = []; render(); return; }
+    S.friendSearchBusy = true;
+    render();
+    try {
+      const r = await fetch(`/api/me/friends/search?username=${encodeURIComponent(S.friendQuery)}`, { credentials: 'same-origin' });
+      const data = await r.json();
+      if (!r.ok || !data.ok) throw new Error(data.error || 'Search failed.');
+      S.friendSearch = data.players || [];
+      S.socialError = '';
+    } catch (error) { S.socialError = error.message || 'Search failed.'; }
+    finally { S.friendSearchBusy = false; if (!S.room) render(); }
+  }
+
+  async function socialPost(path, body, success) {
+    try {
+      await postJson(path, body);
+      S.socialError = '';
+      if (success) toast(success);
+      await loadSocial({ quiet: true });
+    } catch (error) {
+      S.socialError = error.message || 'Could not update friends.';
+      if (!S.room) render();
+    }
+  }
+
+  function joinAcceptedInvitation(invitation) {
+    if (!invitation || invitation.status !== 'accepted') return toast('Accept the invitation before joining.');
+    const game = gameMeta(invitation.game_id || invitation.gameId);
+    toast(`Joining ${(game && game.name) || 'private'} table…`);
+    joinTable(invitation.room_code || invitation.roomCode, 'join');
+  }
+
+  function socialHTML() {
+    if (S.guest) return '';
+    const friends = S.friends.map((f) => `<li class="social-row"><span class="social-avatar">${esc(f.avatar || '🧙')}</span><span class="social-info"><b>${esc(f.display_name || f.username)}</b><small>@${esc(f.username)} · ${f.online ? (f.playing ? '🎮 Playing ' + esc((gameMeta(f.playing) || {}).name || f.playing) : '🟢 Online') + ' · ' + pingBadge(f.ping) : 'Last seen ' + (f.last_seen ? new Date(f.last_seen).toLocaleString() : 'unknown')}</small></span><button class="btn ghost small" data-act="removeFriend" data-id="${esc(f.id)}">Remove</button></li>`).join('');
+    const friendNames = new Set(S.friends.map((friend) => friend.username));
+    const requestNames = new Set([...S.friendRequests.incoming, ...S.friendRequests.outgoing].map((request) => request.username));
+    const invitationNames = new Set(S.invitations.incoming.map((invitation) => invitation.username));
+    const searchResults = S.friendSearch.filter((player) => !friendNames.has(player.username) && !requestNames.has(player.username) && !invitationNames.has(player.username));
+    const inviteTargets = S.friends.filter((friend) => !S.invitations.outgoing.some((invitation) => invitation.username === friend.username) && !S.roomInviteSent.has(`${S.room?.code}:${friend.username}`));
+    const resultHTML = searchResults.map((p) => `<li class="social-row"><span class="social-info"><b>${esc(p.display_name || p.username)}</b><small>@${esc(p.username)}</small></span><button class="btn small" data-act="sendFriend" data-username="${esc(p.username)}">Add friend</button></li>`).join('');
+    const tableInviteTargets = inviteTargets.map((f) => `<option value="${esc(f.username)}">${esc(f.display_name || f.username)} (@${esc(f.username)})</option>`).join('');
+    S.inviteFriendOptions = tableInviteTargets;
+    const incoming = S.friendRequests.incoming.map((r) => `<li class="social-row"><span class="social-info"><b>${esc(r.display_name || r.username)}</b><small>@${esc(r.username)} sent a friend request</small></span><button class="btn small" data-act="acceptFriend" data-id="${esc(r.id)}">Accept</button><button class="btn ghost small" data-act="declineFriend" data-id="${esc(r.id)}">Decline</button></li>`).join('');
+    const outgoing = S.friendRequests.outgoing.map((r) => `<li class="social-row"><span class="social-info"><b>${esc(r.display_name || r.username)}</b><small>Request pending</small></span><button class="btn ghost small" data-act="cancelFriend" data-id="${esc(r.id)}">Cancel</button></li>`).join('');
+    const invites = S.invitations.incoming.map((i) => `<li class="social-row"><span class="social-info"><b>${esc(i.display_name || i.username)}</b><small>${esc(i.game_id)} table · ${esc(i.room_code)} · expires ${esc(new Date(i.expires_at).toLocaleString())}</small></span><button class="btn small" data-act="acceptInvitation" data-id="${esc(i.id)}">Accept</button><button class="btn ghost small" data-act="declineInvitation" data-id="${esc(i.id)}">Decline</button></li>`).join('');
+    const sent = S.invitations.outgoing.map((i) => `<li class="social-row"><span class="social-info"><b>${esc(i.display_name || i.username)}</b><small>${esc(i.room_code)} · ${esc(i.status)}</small></span><button class="btn ghost small" data-act="revokeInvitation" data-id="${esc(i.id)}">Revoke</button></li>`).join('');
+    return `<section class="home-section social-panel" id="friends"><div class="row" style="justify-content:space-between"><h2 class="section">Friends</h2><button class="btn ghost small" data-act="refreshSocial">Refresh</button></div>
+      ${S.socialError ? `<p class="social-error" role="alert">${esc(S.socialError)}</p>` : ''}${S.socialNotice ? `<p class="social-notice" role="status">${esc(S.socialNotice)}</p>` : ''}${S.socialLoading ? '<p class="hint">Loading friends…</p>' : ''}
+      <form id="friendSearchForm" class="social-search"><label class="sr-only" for="friendSearch">Search by username</label><input id="friendSearch" minlength="1" maxlength="24" autocomplete="off" placeholder="Find someone by username" value="${esc(S.friendQuery)}"><button class="btn small" type="submit" ${S.friendSearchBusy ? 'disabled' : ''}>Search</button></form>
+      ${resultHTML ? `<ul class="social-list">${resultHTML}</ul>` : (S.friendQuery && !S.friendSearchBusy ? '<p class="hint">No new players found.</p>' : '')}
+      ${incoming || outgoing ? `<h3>Friend requests</h3><ul class="social-list">${incoming}${outgoing}</ul>` : ''}
+      <h3>Your friends</h3>${friends ? `<ul class="social-list">${friends}</ul>` : '<p class="hint">No friends yet. Search for a username to add someone.</p>'}
+      ${invites ? `<h3>Table invitations</h3><ul class="social-list">${invites}</ul>` : ''}${sent ? `<details><summary>Sent invitations</summary><ul class="social-list">${sent}</ul></details>` : ''}
+    </section>`;
+  }
+
+  function inviteFriendsHTML() {
+    if (!S.room || S.room.visibility !== 'private' || S.room.hostId !== S.id || S.guest) return '';
+    const friends = S.inviteFriendOptions || '';
+    return `<form id="tableInviteForm" class="social-search"><label for="tableInviteFriend">Invite a friend to this private table</label><select id="tableInviteFriend" required>${friends || '<option value="">All friends already invited</option>'}</select><button class="btn small" type="submit" ${friends ? '' : 'disabled'}>Send invitation</button></form>`;
   }
 
   function recentTablesHTML() {
@@ -557,6 +654,7 @@
         S.ready = true;
         render();
         loadRecent();
+        loadSocial({ quiet: true });
         if (!S.routed) { S.routed = true; applyRoute(); } // open #profile or #u/<name> if that is where the person came in
         const queue = S.pending;
         S.pending = [];
@@ -597,6 +695,24 @@
       case 'notice':
         toast(m.text);
         break;
+      case 'socialNotice':
+        S.socialNotice = m.text || 'You have a new friends update.';
+        toast(S.socialNotice);
+        if (S.ready && !S.room) loadSocial({ quiet: true });
+        render();
+        break;
+      case 'latency':
+        S.ping = Number.isFinite(m.ms) ? m.ms : null;
+        for (const el of document.querySelectorAll('[data-ping-self]')) el.outerHTML = pingBadge(S.ping, { label: el.dataset.label === '1', live: 'self' });
+        break;
+      case 'socialPresence':
+        if (Array.isArray(m.friends)) S.friends = m.friends;
+        else {
+          const friend = S.friends.find((f) => f.id === m.playerId);
+          if (friend) { friend.online = Boolean(m.online); friend.playing = m.playing || null; friend.ping = Number.isFinite(m.ping) ? m.ping : null; friend.last_seen = m.lastSeen || friend.last_seen; }
+        }
+        if (!S.room) render();
+        break;
       case 'state': {
         S.room = m.room;
         S.view = m.view;
@@ -614,6 +730,7 @@
         break;
       }
       case 'left':
+        S.card = null; closeModal();
         S.page = 'home';
         loadRecent();
         S.room = null;
@@ -674,6 +791,7 @@
   window.addEventListener('popstate', () => { if (!S.room) applyRoute(); });
 
   document.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('.pseat[role="button"]')) { e.preventDefault(); openPlayerCard(e.target.dataset.pid); return; }
     if (e.key !== 'Escape') return;
     if (S.auth) closeOverlay();
     else if (document.getElementById('modal-overlay')) closeModal();
@@ -740,7 +858,8 @@
     return `hsl(${h} 55% 42%)`;
   };
   const initial = (name) => esc([...name][0] || '?').toUpperCase();
-  const avatar = (m) => `<span class="avatar" style="background:${avatarColor(m.name)}">${m.avatar ? esc(m.avatar) : initial(m.name)}</span>`;
+  /** A round avatar for anything with a name and an optional emoji; `cls` adds a size/placement class ('big', 'tb-av'). */
+  const avatar = (m, cls = '') => `<span class="avatar${cls ? ' ' + cls : ''}" style="background:${avatarColor(m.name)}">${m.avatar ? esc(m.avatar) : initial(m.name)}</span>`;
 
   function profileHTML() {
     const userBadge = S.username ? `<div class="profile-user">@${esc(S.username)}</div>` : '';
@@ -817,6 +936,79 @@
     }), 0);
   }
 
+
+  // ------------------------------------------------------------ player card (tap a player at the table)
+  const sameName = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+  /** How you and this person are connected right now: me | bot | guest | friend | outgoing | incoming | none. */
+  function relationTo(person) {
+    if (!person) return { kind: 'gone' };
+    if (person.id === S.id) return { kind: 'me' };
+    if (person.bot) return { kind: 'bot' };
+    if (!person.username) return { kind: 'guest' };
+    const friend = (S.friends || []).find((f) => sameName(f.username, person.username));
+    if (friend) return { kind: 'friend', friend };
+    const out = ((S.friendRequests || {}).outgoing || []).find((r) => sameName(r.username, person.username));
+    if (out) return { kind: 'outgoing', request: out };
+    const inc = ((S.friendRequests || {}).incoming || []).find((r) => sameName(r.username, person.username));
+    if (inc) return { kind: 'incoming', request: inc };
+    return { kind: 'none' };
+  }
+  const roomPerson = (pid) => S.room && [...(S.room.members || []), ...(S.room.spectators || [])].find((x) => x.id === pid);
+
+  function cardHTML() {
+    const C = S.card;
+    const person = roomPerson(C.pid) || C.last;
+    if (!person) return '<p class="hint">This player is no longer at the table.</p>';
+    C.last = person;
+    const rel = relationTo(person);
+    const here = Boolean(roomPerson(C.pid));
+    const prof = C.profile;
+    const stats = prof ? `<div class="pcard-stats"><div><b>${prof.played}</b><span>Games</span></div><div><b>${prof.wins}</b><span>Wins</span></div><div><b>${prof.winRate === null ? '–' : prof.winRate + '%'}</b><span>Win rate</span></div></div>` : '';
+    const sub = person.bot ? 'Bot' : person.username ? `@${esc(person.username)}` : 'Guest player';
+    const conn = !person.bot && here ? `<p class="pp-conn">📶 ${person.connected === false ? 'Disconnected' : pingBadge(person.ping, { label: true })}</p>` : '';
+    const busy = C.busy ? ' disabled' : '';
+    const add = [];
+    if (rel.kind === 'none') add.push(`<button type="button" class="btn"${busy} data-modal-act="cardAdd">➕ Add friend</button>`);
+    if (rel.kind === 'outgoing') add.push(`<button type="button" class="btn ghost"${busy} data-modal-act="cardCancel">⏳ Request sent · Cancel</button>`);
+    if (rel.kind === 'incoming') add.push(`<button type="button" class="btn"${busy} data-modal-act="cardAccept">✔ Accept friend request</button>`, `<button type="button" class="btn ghost"${busy} data-modal-act="cardDecline">Decline</button>`);
+    if (rel.kind === 'friend') add.push('<p class="pcard-note">✔ You are friends.</p>', `<button type="button" class="btn ghost"${busy} data-modal-act="cardRemove">Remove friend</button>`);
+    if (rel.kind === 'guest') add.push('<p class="pcard-note">Guests have no username, so they cannot be added as friends.</p>');
+    if (rel.kind === 'none' && S.guest) add.length = 0;
+    const others = [];
+    if (rel.kind === 'me') others.push('<button type="button" class="btn ghost" data-modal-act="cardEditMe">Edit my profile</button>');
+    if (person.username && rel.kind !== 'me') others.push(`<a class="btn ghost" href="/#u/${encodeURIComponent(person.username)}" target="_blank" rel="noopener">View full profile</a>`);
+    if (rel.kind !== 'me' && rel.kind !== 'bot') others.push(`<button type="button" class="btn ghost" data-modal-act="cardMute">${muted.has(person.id) ? '🔔 Unmute in chat' : '🔇 Mute in chat'}</button>`);
+    return `<div class="pcard-head">${avatar(person, 'big')}<div><h3>${esc(person.name)}</h3><p>${sub}${person.id === S.id ? ' · you' : ''}</p>${conn}</div></div>${stats}${C.error ? `<p class="auth-msg" role="alert">${esc(C.error)}</p>` : ''}<div class="pcard-actions">${add.join('')}${others.join('')}</div>${S.guest && rel.kind === 'none' ? '<p class="pcard-note">Log in to add friends.</p>' : ''}`;
+  }
+  function drawCard() {
+    if (!S.card) return;
+    const body = document.querySelector('#modal-overlay .modal-body');
+    if (body && body.dataset.card === S.card.pid) body.innerHTML = cardHTML();
+    else openModal('Player', cardHTML(), (o) => { o.querySelector('.modal-body').dataset.card = S.card.pid; });
+  }
+  function openPlayerCard(pid) {
+    const person = roomPerson(pid);
+    if (!person) return;
+    S.card = { pid, profile: null, busy: false, error: '', last: person };
+    drawCard();
+    if (person.username && !person.bot) {
+      getJson(`/api/players/${encodeURIComponent(person.username)}`)
+        .then((d) => { if (S.card && S.card.pid === pid) { S.card.profile = d.profile; drawCard(); } })
+        .catch(() => { /* the card works without the numbers */ });
+    }
+  }
+  async function cardAction(path, body, success) {
+    const C = S.card; if (!C || C.busy) return;
+    C.busy = true; C.error = ''; drawCard();
+    try {
+      await postJson(path, body);
+      if (success) toast(success);
+      await loadSocial({ quiet: true });
+    } catch (e) { C.error = e.message || 'That did not work. Try again.'; }
+    C.busy = false;
+    drawCard();
+  }
+
   // ------------------------------------------------------------ chat, watchers, turn timer
   const $chat = document.createElement('div');
   $chat.id = 'chat';
@@ -833,7 +1025,12 @@
   $watch.hidden = true;
   document.body.appendChild($watch);
 
+  /** People you muted in chat (kept on this device only). Their messages are hidden for you; nobody is told. */
+  const muted = new Set((() => { try { return JSON.parse(store.get('ct_muted') || '[]').filter((x) => typeof x === 'string').slice(-200); } catch { return []; } })());
+  const saveMuted = () => store.set('ct_muted', JSON.stringify([...muted].slice(-200)));
+
   function msgHTML(m) {
+    if (!m.sys && muted.has(m.id) && m.id !== S.id) return '';
     if (m.sys) return `<div class="msg sys">${esc(m.text)}</div>`;
     const mine = m.id === S.id;
     return `<div class="msg ${mine ? 'mine' : ''}"><span class="mav" style="background:${avatarColor(m.name)}">${m.avatar ? esc(m.avatar) : initial(m.name)}</span><div class="mb"><b>${esc(m.name)}${m.spec ? ' <i title="Spectator">👁</i>' : ''}</b><p>${esc(m.text)}</p></div></div>`;
@@ -856,7 +1053,7 @@
     S.chat.push(m);
     if (S.chat.length > 60) S.chat.shift();
     if (S.chatOpen) drawChat();
-    else if (!m.sys && m.id !== S.id) {
+    else if (!m.sys && m.id !== S.id && !muted.has(m.id)) {
       S.unread++;
       updateBadges();
       CardTable.sound.play('chat');
@@ -979,6 +1176,15 @@
 
   const joinedText = (iso) => (iso ? `Joined ${fmtDate(iso)}` : '');
 
+  /** Connection quality from a round-trip time in ms. Colour is never the only signal: the label is always there. */
+  const pingQuality = (ms) => (ms < 60 ? ['great', 'Excellent'] : ms < 120 ? ['good', 'Good'] : ms < 250 ? ['fair', 'Fair'] : ['poor', 'Poor']);
+  const pingBadge = (ms, { label = false, live = '' } = {}) => {
+    const attrs = `${live ? ` data-ping-${live}` : ''}${label ? ' data-label="1"' : ''}`;
+    if (!Number.isFinite(ms)) return `<span class="ping none"${attrs}>– ms</span>`;
+    const [cls, word] = pingQuality(ms);
+    return `<span class="ping q-${cls}" title="Round trip to the server: ${word}"${attrs}>${ms} ms${label ? ' · ' + word : ''}</span>`;
+  };
+
   function historyHTML(h) {
     if (!h || !h.total) return emptyState('🕘', 'No games yet', 'Finished games show up here with the game, the date and how it went.');
     const rows = h.items.map((g) => {
@@ -1008,14 +1214,22 @@
           </div>`
         : statsHTML(P.data.stats);
       inner = `<header class="pp-head">
-          <span class="avatar big" style="background:${avatarColor(name)}">${me.avatar ? esc(me.avatar) : initial(name)}</span>
-          <div class="pp-id"><h1>${esc(name)}</h1><p>${me.username ? `@${esc(me.username)} · ` : ''}${esc(joinedText(me.joinedAt))}</p></div>
+          ${avatar({ name, avatar: me.avatar }, 'big')}
+          <div class="pp-id"><h1>${esc(name)}</h1><p>${me.username ? `@${esc(me.username)} · ` : ''}${esc(joinedText(me.joinedAt))}</p><p class="pp-conn">📶 Connection ${pingBadge(S.ping, { label: true, live: 'self' })}</p></div>
           <button type="button" class="btn ghost small" data-act="editProfile">Edit profile</button>
         </header>
         <div class="tabs" role="tablist">${tabBtn('overview', 'Overview')}${tabBtn('history', `History${P.history && P.history.total ? ` <small>${P.history.total}</small>` : ''}`)}${tabBtn('account', 'Account')}</div>
         <section class="tab-panel" role="tabpanel">${panel}</section>`;
     }
     $app.innerHTML = `${topbarHTML()}<main class="page profile-page"><a class="back-link" href="/" data-act="goHome">← Back to games</a>${inner}</main>`;
+  }
+
+  /** Only people you are friends with show their status and connection on their page (it comes from your own friends list). */
+  function friendLine(username) {
+    const f = (S.friends || []).find((x) => String(x.username).toLowerCase() === String(username).toLowerCase());
+    if (!f) return '';
+    if (!f.online) return '<p class="pp-conn">Friend · offline</p>';
+    return `<p class="pp-conn">Friend · ${f.playing ? '🎮 Playing ' + esc((gameMeta(f.playing) || {}).name || f.playing) : '🟢 Online'} · ${pingBadge(f.ping, { label: true })}</p>`;
   }
 
   function renderPlayerPage() {
@@ -1025,7 +1239,7 @@
     else if (P.error) inner = errorBlock(P.error);
     else {
       const d = P.data;
-      inner = `<header class="pp-head"><span class="avatar big" style="background:${avatarColor(d.displayName)}">${d.avatar ? esc(d.avatar) : initial(d.displayName)}</span><div class="pp-id"><h1>${esc(d.displayName)}</h1><p>@${esc(d.username)} · ${esc(joinedText(d.joinedAt))}</p></div></header>
+      inner = `<header class="pp-head">${avatar({ name: d.displayName, avatar: d.avatar }, 'big')}<div class="pp-id"><h1>${esc(d.displayName)}</h1><p>@${esc(d.username)} · ${esc(joinedText(d.joinedAt))}</p>${friendLine(d.username)}</div></header>
         <div class="stat-grid"><div class="stat-tile"><span class="stat-v">${d.played}</span><span class="stat-l">Games played</span></div><div class="stat-tile good"><span class="stat-v">${d.wins}</span><span class="stat-l">Wins</span></div><div class="stat-tile"><span class="stat-v">${d.winRate === null ? '–' : d.winRate + '%'}</span><span class="stat-l">Win rate</span></div></div>`;
     }
     $app.innerHTML = `${topbarHTML()}<main class="page profile-page"><a class="back-link" href="/" data-act="goHome">← Back to games</a>${inner}</main>`;
@@ -1087,7 +1301,7 @@
       return `<nav class="topbar" aria-label="Main">${brand}<div class="tb-right"><button type="button" class="btn ghost small" data-act="showLogin">Log in</button><button type="button" class="btn small" data-act="showRegister">Sign up</button></div></nav>`;
     }
     const name = S.named ? S.name : 'Player';
-    const av = `<span class="avatar tb-av" style="background:${avatarColor(name)}">${S.avatar ? esc(S.avatar) : initial(name)}</span>`;
+    const av = avatar({ name, avatar: S.avatar }, 'tb-av');
     const item = (act, icon, label, extra = '', cls = '') => `<button type="button" role="menuitem" class="menu-item ${cls}" data-act="${act}"><span class="mi-ico" aria-hidden="true">${icon}</span><span class="mi-label">${label}</span>${extra}</button>`;
     const menu = S.menuOpen ? `<div class="menu" role="menu" aria-label="Account">
         <div class="menu-head">${av}<div class="menu-who"><b>${esc(name)}</b>${S.username ? `<small>@${esc(S.username)}</small>` : ''}</div></div>
@@ -1108,7 +1322,15 @@
     return true;
   }
 
-  const modalActions = {};
+  const modalActions = {
+    cardAdd: () => { const p = S.card && S.card.last; if (p && p.username) cardAction('/api/me/friend-requests', { username: p.username }, 'Friend request sent.'); },
+    cardCancel: () => { const r = relationTo(S.card && S.card.last); if (r.request) cardAction('/api/me/friend-requests/cancel', { requestId: r.request.id }); },
+    cardAccept: () => { const r = relationTo(S.card && S.card.last); if (r.request) cardAction('/api/me/friend-requests/accept', { requestId: r.request.id }, 'Friend request accepted.'); },
+    cardDecline: () => { const r = relationTo(S.card && S.card.last); if (r.request) cardAction('/api/me/friend-requests/decline', { requestId: r.request.id }); },
+    cardRemove: () => { const r = relationTo(S.card && S.card.last); if (r.friend && confirm('Remove this friend? Pending invitations between you will be revoked.')) cardAction('/api/me/friends/remove', { friendId: r.friend.id }, 'Friend removed.'); },
+    cardMute: () => { const p = S.card && S.card.last; if (!p) return; if (muted.has(p.id)) muted.delete(p.id); else muted.add(p.id); saveMuted(); drawChat(); drawCard(); },
+    cardEditMe: () => { closeModal(); openEditProfileDialog(); },
+  };
   function closeModal() {
     const o = document.getElementById('modal-overlay');
     if (o) o.remove();
@@ -1131,6 +1353,32 @@
   }
 
   /** Edit name and avatar. The name is saved over HTTP (validated on the server); the avatar goes through the table socket as before. */
+  /**
+   * Change the profile picture. Signed-in players save it on their account (validated by the server, which also updates
+   * the table they are sitting at); guests only have it for this session, so it goes over the socket as before.
+   * The old picture comes back if the server refuses, so the screen never shows something that was not saved.
+   */
+  async function changeAvatar(next) {
+    if (!next || next === S.avatar) return;
+    const previous = S.avatar;
+    S.avatar = next;
+    store.set('ct_avatar', next);
+    render();
+    if (S.guest) { send({ t: 'setName', name: S.name || undefined, avatar: next }); return; }
+    try {
+      const out = await postJson('/api/me/avatar', { avatar: next });
+      S.avatar = out.avatar;
+      store.set('ct_avatar', out.avatar);
+      if (S.profile && S.profile.data) S.profile.data.profile.avatar = out.avatar;
+      toast('Profile picture saved');
+    } catch (err) {
+      S.avatar = previous;
+      store.set('ct_avatar', previous || '');
+      toast(err.message || 'Could not save the profile picture.');
+    }
+    render();
+  }
+
   function openEditProfileDialog() {
     const body = () => {
       const name = S.named ? S.name : '';
@@ -1146,14 +1394,11 @@
         <div class="av-picks">${picks}</div>`;
     };
     openModal('Edit profile', body(), (o) => {
-      modalActions.pickAvatar = (el) => {
-        S.avatar = el.dataset.a;
-        store.set('ct_avatar', S.avatar);
-        send({ t: 'setName', name: S.name || undefined, avatar: S.avatar });
+      modalActions.pickAvatar = async (el) => {
+        await changeAvatar(el.dataset.a);
         const keep = o.querySelector('#profileName').value;
         o.querySelector('.modal-body').innerHTML = body();
         o.querySelector('#profileName').value = keep;
-        render();
       };
       o.addEventListener('submit', async (e) => {
         if (e.target.id !== 'nameForm') return;
@@ -1252,6 +1497,7 @@
       ${rejoinBannerHTML()}
       ${S.announcement && S.dismissedAnnouncement !== S.announcement ? `<div class="notice-bar" role="status"><span>${esc(S.announcement)}</span><button type="button" class="wn-close" data-act="dismissAnnouncement" aria-label="Dismiss announcement">✕</button></div>` : ''}
       ${recentTablesHTML()}
+      ${socialHTML()}
       <section class="home-section" id="games">
         <h2 class="section">Games</h2>
         ${tiles ? `<div class="game-grid">${tiles}</div>` : loadingBlock('Loading games…')}
@@ -1316,14 +1562,15 @@
       ${spectating ? `<section class="panel"><h3>👁 You are watching</h3><p class="hint" style="text-align:left;margin:6px 0 10px">The next game starts when the host presses Start. ${open > 0 ? 'There is an open seat if you want to play.' : 'Ask the host to free a seat if you want to play.'}</p>${open > 0 ? '<button class="btn" data-act="sit">Take a seat</button>' : ''}</section>` : ''}
       ${r.spectators && r.spectators.length ? `<details class="spectator-list"><summary>👁 ${r.spectators.length} watching</summary><div class="spectator-names">${r.spectators.map((x) => esc(x.name)).join(', ')}</div></details>` : ''}
       <section class="panel code-card">
-        <div class="label">Table code · share it with your friends</div>
+        <div class="label">${r.visibility === 'public' ? 'Table code · share it with your friends' : 'Table code · private, invited friends only'}</div>
         <div class="code">${esc(r.code)}</div>
-        <div class="row" style="justify-content:center">
+        ${r.visibility === 'public' ? `<div class="row" style="justify-content:center">
           <button class="btn small" data-act="copyLink">Copy invite link</button>
           <button class="btn small wa" data-act="whatsapp">WhatsApp</button>
           ${navigator.share ? '<button class="btn ghost small" data-act="share">Share…</button>' : ''}
-        </div>
-        ${isHost ? `<div class="visibility-control"><span class="visibility-status ${r.visibility === 'public' ? 'public' : 'private'}">${r.visibility === 'public' ? '🌐 Public table' : '🔒 Private table'}</span><button class="btn ghost small" data-act="toggleVisibility">${r.visibility === 'public' ? 'Make private' : 'Make public'}</button><small>${r.visibility === 'public' ? 'Anyone can find this table in Sessions in Progress.' : 'Only people with the invite link or code can join.'}</small></div>` : ''}
+        </div>` : ''}
+        ${isHost ? `<div class="visibility-control"><span class="visibility-status ${r.visibility === 'public' ? 'public' : 'private'}">${r.visibility === 'public' ? '🌐 Public table' : '🔒 Private table'}</span><button class="btn ghost small" data-act="toggleVisibility">${r.visibility === 'public' ? 'Make private' : 'Make public'}</button><small>${r.visibility === 'public' ? 'Anyone can find this table in Sessions in Progress.' : 'Only friends with an accepted invitation can join.'}</small></div>` : ''}
+        ${inviteFriendsHTML()}${r.visibility === 'public' ? '<small>Public table links and codes can be shared freely.</small>' : '<small>Private table links and codes are not access grants. Invite each friend above; they must accept first.</small>'}
       </section>
       <section class="panel">${profileHTML()}</section>
       <section class="panel">
@@ -1421,13 +1668,8 @@
 
   // ------------------------------------------------------------ events
   const actions = {
-    avatar: (el) => {
-      S.avatar = el.dataset.a;
-      S.avatarOpen = false;
-      store.set('ct_avatar', S.avatar);
-      send({ t: 'setName', name: S.name || undefined, avatar: S.avatar });
-      render();
-    },
+    playerCard: (el) => openPlayerCard(el.dataset.pid),
+    avatar: (el) => { S.avatarOpen = false; changeAvatar(el.dataset.a); },
     scrollGames: () => document.getElementById('games')?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }),
     goHome: (el, e) => { if (e) e.preventDefault(); openPage('home'); },
     reloadProfile: () => loadProfile(),
@@ -1478,23 +1720,44 @@
       store.set('ct_ann', S.announcement);
       render();
     },
+    refreshSocial: () => loadSocial(),
+    sendFriend: (el) => socialPost('/api/me/friend-requests', { username: el.dataset.username }, 'Friend request sent.'),
+    acceptFriend: (el) => socialPost('/api/me/friend-requests/accept', { requestId: el.dataset.id }, 'Friend request accepted.'),
+    declineFriend: (el) => socialPost('/api/me/friend-requests/decline', { requestId: el.dataset.id }),
+    cancelFriend: (el) => socialPost('/api/me/friend-requests/cancel', { requestId: el.dataset.id }),
+    removeFriend: (el) => { if (confirm('Remove this friend? Pending invitations between you will be revoked.')) socialPost('/api/me/friends/remove', { friendId: el.dataset.id }, 'Friend removed.'); },
+    acceptInvitation: async (el) => {
+      try {
+        const out = await postJson('/api/me/table-invitations/accept', { invitationId: el.dataset.id });
+        await loadSocial({ quiet: true });
+        joinAcceptedInvitation(out.invitation);
+      } catch (error) { S.socialError = error.message || 'Could not accept invitation.'; render(); }
+    },
+    declineInvitation: (el) => socialPost('/api/me/table-invitations/decline', { invitationId: el.dataset.id }),
+    revokeInvitation: (el) => socialPost('/api/me/table-invitations/revoke', { invitationId: el.dataset.id }),
     logout: () => { S.menuOpen = false; doLogout(); },
     logoutAll: () => { S.menuOpen = false; doLogoutAll(); },
     copyLink: async () => {
+      const url = safeTableUrl();
       try {
-        await navigator.clipboard.writeText(inviteUrl());
-        toast('Invite link copied');
+        await navigator.clipboard.writeText(url);
+        toast(S.room.visibility === 'public' ? 'Table link copied' : 'Private code is not an access grant. Invite friends from the table.');
       } catch {
-        window.prompt('Copy this link:', inviteUrl());
+        window.prompt('Copy this link:', url);
       }
     },
     whatsapp: () => {
       const g = gameMeta(S.room.gameId);
-      const text = `Join my ${g ? g.name : 'card'} table on Tableverse: ${inviteUrl()} (code ${S.room.code})`;
+      const url = safeTableUrl();
+      const text = S.room.visibility === 'public'
+        ? `Join my ${g ? g.name : 'card'} table on Tableverse: ${url} (code ${S.room.code})`
+        : `Join my private ${g ? g.name : 'card'} table on Tableverse. I will send you a friend invitation in the app.`;
       window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
     },
     share: () => {
-      navigator.share({ title: 'Tableverse', text: `Join my table (code ${S.room.code})`, url: inviteUrl() }).catch(() => {});
+      const url = safeTableUrl();
+      const text = S.room.visibility === 'public' ? `Join my table (code ${S.room.code})` : 'I will send you a private table invitation in the app.';
+      navigator.share({ title: 'Tableverse', text, url }).catch(() => {});
     },
   };
 
@@ -1521,13 +1784,33 @@
       send({ t: 'setOptions', options });
     }
   });
-  $app.addEventListener('submit', (e) => {
+  $app.addEventListener('submit', async (e) => {
     if (e.target.id === 'joinForm') {
       e.preventDefault();
       if (S.draftCode.length !== 6) return toast('Enter the 6-letter table code');
       const code = S.draftCode;
       gateLogin(() => askJoinMode(code, tableByCode(code)));
+    } else if (e.target.id === 'friendSearchForm') {
+      e.preventDefault();
+      searchFriends(document.getElementById('friendSearch')?.value || '');
+    } else if (e.target.id === 'tableInviteForm') {
+      e.preventDefault();
+      const username = document.getElementById('tableInviteFriend')?.value;
+      if (!username || !S.room || S.room.visibility !== 'private') return;
+      const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      try {
+        await postJson('/api/me/table-invitations', { username, gameId: S.room.gameId, roomCode: S.room.code, expiresAt });
+        S.roomInviteSent.add(`${S.room.code}:${username}`);
+        toast('Invitation sent.');
+        await loadSocial({ quiet: true });
+        render();
+      } catch (error) {
+        S.socialError = error.message || 'Could not send invitation.';
+        render();
+      }
     }
   });
+
+  setInterval(() => { if (S.ready && !S.room) loadSocial({ quiet: true }); }, 60000);
 
 })();

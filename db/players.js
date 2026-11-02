@@ -162,10 +162,16 @@ async function updateProfile(playerId, { displayName, avatar }) {
   }
 }
 
+async function updateLastSeen(playerId) {
+  if (!db.hasDatabase()) return memoryStore.touch(playerId);
+  await db.query('UPDATE players SET last_seen_at = NOW() WHERE id = $1', [playerId]);
+}
+
 module.exports = {
   hashToken,
   generateToken,
   authenticateToken,
   createAnonymousPlayer,
   updateProfile,
+  updateLastSeen,
 };

@@ -44,6 +44,16 @@ async function updateDisplayName(playerId, rawName) {
   return { displayName: r.rows[0].display_name };
 }
 
+/** The profile picture is one of the server's fixed avatars (anything else is a 400); only the signed-in player can change their own. */
+async function updateAvatar(playerId, avatar, allowed) {
+  need();
+  const pick = typeof avatar === 'string' ? avatar : '';
+  if (!Array.isArray(allowed) || !allowed.includes(pick)) throw new AuthError('Choose one of the available avatars.', 400);
+  const r = await db.query('UPDATE players SET avatar = $2 WHERE id = $1 RETURNING avatar', [playerId, pick]);
+  if (!r.rows.length) throw new AuthError('Account not found.', 404);
+  return { avatar: r.rows[0].avatar };
+}
+
 /**
  * Finished games of one registered player, newest first, paginated.
  * Only real recorded games count: a row needs a match_key (older rows have unknown winners) and the player must be a
@@ -154,4 +164,9 @@ async function deleteAccount(playerId, password) {
   });
 }
 
-module.exports = { DELETED_NAME, RECENT_LIMIT, HISTORY_PAGE_SIZE, cleanDisplayName, getOwnProfile, updateDisplayName, getHistory, getPublicProfile, rememberTable, listRecentTables, forgetRecentTables, clearRecentTables, deleteAccount };
+async function updatePresence(playerId) {
+  if (!db.hasDatabase()) return;
+  await db.query('UPDATE players SET last_seen_at = NOW() WHERE id = $1', [playerId]);
+}
+
+module.exports = { DELETED_NAME, RECENT_LIMIT, HISTORY_PAGE_SIZE, cleanDisplayName, getOwnProfile, updateDisplayName, updateAvatar, getHistory, getPublicProfile, rememberTable, listRecentTables, forgetRecentTables, clearRecentTables, deleteAccount, updatePresence };

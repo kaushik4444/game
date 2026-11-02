@@ -1,36 +1,71 @@
-# Tableverse progress notes (branch `claude/tableverse-friends-private-tables`)
+# Tableverse progress notes (branch `feature/stage-6-friends-private-tables`)
 
 Never merge this branch into `main` from an agent session. Work in small stages: test, commit, push after each.
 
 ## How to run the tests
 - No database needed: `node tests/<name>.test.js` for engine, twentynine, poker, themind, results, scrub, stats, matchqueue, isolation, email, cleanup, db, production, smoke.
 - PostgreSQL suites (`npm run test:pg`) need `TEST_DATABASE_URL` pointing at a THROW-AWAY local database. Never use the Neon production URL.
-- The agent sandbox used so far cannot install `pg`, `ws` (borrowed from /opt/npm-tools), `@node-rs/argon2` and has no PostgreSQL server, so **every `*.pg.test.js` file has only been syntax-checked there, never executed**. Run `npm run test:pg` locally before merging.
+- A skipped PostgreSQL suite is not a pass. The prior A1–A5 sandbox could not execute PostgreSQL tests; refer to the CI run or run them locally with a dedicated disposable database.
 
-## Completed
-- (before this task) Profiles/history (Stage 5), account deletion anonymisation, revoked-WebSocket and repeat-spectator fixes by the owner (commits dbcb73e, 3a91c6e).
-- **A1 Single active session** (migration 006): `createSession` locks the player row, revokes older sessions, inserts; partial unique index `ux_auth_sessions_one_active`; login runs in one transaction; a new login closes the older device's sockets (code 4002, client shows a sign-in sheet); logout/reset close sockets by session token (4001). Tests: `tests/session.pg.test.js` (new), `account.pg`, `production.pg`, `cleanup.test`, `db.pg` adjusted.
+## Completed before Stage 6
+- Profiles/history (Stage 5), account deletion anonymisation, revoked-WebSocket and repeat-spectator fixes by the owner (commits dbcb73e, 3a91c6e).
+- **A1 Single active session** (migration 006): `createSession` locks the player row, revokes older sessions, inserts; partial unique index `ux_auth_sessions_one_active`; login runs in one transaction; a new login closes the older device's sockets (code 4002, client shows a sign-in sheet); logout/reset close sockets by session token (4001).
+- **A2 Spectator reliability**: duplicate joins detect existing seat/watching state before capacity checks, repair stale room state, and avoid duplicate announcements.
+- **A3 Wizard/table mobile layout**: mobile overflow and seat/status/trump placement fixed; browser UI suite covered 288 viewport/setup checks.
+- **A4 Match history and restart**: unique match key, shutdown-safe spool and periodic replay.
+- **A5 Regression review**: recorded in earlier project progress and merged to main.
 
-- **A2 Spectator reliability**: `join` now detects "already at this table" (seated or watching) before any capacity check, repairs a stale `p.room`, and never repeats the watching/joined announcement; spectator cap is configurable (`opts.maxSpectators`, default 20) for tests. Tests: `tests/spectators.test.js` (DB-free, runs on the real server in memory mode; 7 tests, passing).
+## Stage 6 progress
 
-- **A3 Wizard/table mobile layout**: removed `.wz { overflow-x: hidden }` and fixed what it hid: phone header is two even rows (round label, then six controls), seats no longer sit under the status/bid bars, trump card moves above the table for 3 and 5+ players on phones (desktop corner shows the card only), The Mind level dots shrink instead of overflowing at 320 px. `npm run test:ui` (tests/ui/wizard-layout.js) drives real Chromium with real engine views: 8 table setups x 6 seeds x 6 viewports (320x568 ... 1280x800, incl. phone landscape) = 288 checks, all passing. It is not in CI (needs a browser).
-- **A4 Match history and restart**: reviewed the whole lifecycle (new `matchKey` per start, record only at game end, `status` guard, unique `match_key`, spool replay). Fixed: a game finishing during shutdown is now spooled instead of dropped; the spool is replayed every 10 minutes (not only at start) and skips records already being written. Tests: 4 new cases in `tests/matchqueue.test.js` (run, passing) and `tests/matches.pg.test.js` (rematch = new match and nothing overwritten, exactly once, failing DB -> spool -> restart saves once, second restart adds nothing).
-- **A5 Regression review**: see "Test report" below.
+### S6.1 — Database & Backend Foundation (verified)
+- Branch created from latest fetched `origin/main` at `aafd049` as `feature/stage-6-friends-private-tables`.
+- Added migration `007_friends_private_tables.sql` defining canonical friendships, constrained friend-request lifecycle, and private-table invitation metadata with FK cascades, uniqueness and lookup indexes.
+- Added `db/friends.js` persistence operations and authenticated endpoints under `/api/me/friends*`, `/api/me/friend-requests*`, and `/api/me/table-invitations*`; routing reuses cookie session auth, CSRF, error handling and rate limiting.
+- Updated cleanup classification, delete order and test fixtures for the three new tables.
+- Added `tests/friends.pg.test.js`; included it in package scripts/build syntax checks.
+- The opposite-direction request policy is auto-accept: a new request in response to an existing reverse pending request atomically accepts it and creates the friendship.
+- Known boundary: invitation APIs persist table metadata and invitation lifecycle only. They do not authorize room joins, generate shareable secret codes, create private rooms, send notifications, or provide presence/UI; those behaviors remain for S6.3–S6.5.
+- Review fixes: SQL search retains the `[a-z0-9_]` input policy and uses parameterized SQL with LIKE escaping; tests reject `%` and backslash prefixes. Friend-request transitions acquire the canonical pair advisory lock before row locking. Invitation acceptance now shares that lock with friend removal and revalidates friendship before accepting. Added migration-007 concurrent application coverage and invitation/removal race coverage. Cleanup schema inventory now includes both participant FKs for each social table.
+- Verification: `node tests/production.test.js` (13 pass), `node tests/smoke.test.js` (pass), `npm run build` (pass), and `git diff --check` (pass). Full `npm run test:pg` passed against the disposable local PostgreSQL test databases with no skips: database/migration 30, PostgreSQL production 17, cleanup 13, account 10, match lifecycle 4, session 7, and friends/invitations 7 tests. The three-instance migration test confirms migrations 001–007 apply once and subsequent migration run is a no-op.
+- Test database: local endpoint `127.0.0.1:5432/postgres`; helper creates/drops random `tv_test_*` databases. User provided this as TEST_DATABASE_URL and it passed helper safety checks.
+- Commit `bf1c387571fb6a2f2c0c4fd5e2267da5bf46bb61` (`Fix Stage 6.1 friendship invitation races`) pushed to `origin/feature/stage-6-friends-private-tables`; not merged into `main`.
 
-## Test report (last run, A5)
-Executed and passing here: `npm run build`; engine, twentynine, poker, themind, results, scrub, matchqueue (17), cleanup, email, isolation, db (memory mode); `npm run test:ui` (288 browser checks).
-NOT executed here (cannot load `pg` / `@node-rs/argon2`, registry unreachable, no real PostgreSQL driver): `production`, `smoke`, `spectators`, `stats`, and every `*.pg.test.js` (`db`, `production`, `cleanup`, `account`, `session`, `matches`) - these print SKIPPED without TEST_DATABASE_URL, which exits 0 and is NOT a pass. Only syntax-checked. CI (`npm run test:pg` against the postgres:16 service) is where they must run.
-Code review of A1-A4 (security, migration 006, in-memory mode): no defects found beyond the fixes above. Migration 006 only revokes (never deletes) extra sessions, then adds a partial unique index; every session-creating path goes through `createSession` or creates a brand-new account.
+### S6.2–S6.5 — continued by the agent after the owner's `incomplete stage 6` commit (d2f1a23)
+Already in place from the owner's commit: private tables (default) need an accepted invitation, enforced on `join`, `sit` and reconnect (`canEnterRoom`); invitation APIs validate the room; live `socialNotice` / `socialPresence` messages; friends panel, invitations and the in-lobby invite form in `public/app.js`; migration 008.
+Fixed / added in this session:
+- **Per-socket message order**: handlers became async (`join` awaits the DB) but were fired without waiting, so a following `act`/`chat`/`leave` could overtake a join. Messages of one socket now run through a promise queue (`ws.queue`).
+- **Host change no longer locks guests out**: authorization accepted only invitations from the *current* host, so after a host handover a guest who reconnected was removed from the table. `room.hosts` records everyone who hosted; `canJoinPrivateRoom` takes a list of inviter ids.
+- **Presence shows the game being played** (`playing: 'wizard'`, never the table code); debounced live push (`schedulePresence`) after create/join/sit/leave/start/rematch, game end and table close; no presence DB work in memory mode (it was logging an error per connection).
+- **UI**: private lobbies no longer show Copy link / WhatsApp / Share (they are not access grants); fixed real horizontal overflow at 320px (`.page` and `.seats` grid columns were sized by their content; the table code font now scales). Friends panel checked at 320/375/414/768/1280 (no overflow, buttons >= 34px).
+- **Tests**: spectators test uses public tables (private ones need an invitation); `cleanup.test.js` expects migration 008 as the newest; `private-tables.test.js` expects 401 (memory-mode players have no cookie session) and lost a duplicated tail; `private-tables.pg.test.js` friend-removal check was vacuous (an earlier refusal already satisfied it) - now compares error counts and checks the table; new host-change and presence scenarios; both private-tables suites are registered in `npm test` / `test:pg` / `build`.
 
-## Pending
-- B1 Friends DB + API, B2 Friends functionality, B3 Private tables + invitations, B4 Presence + notifications, B5 Frontend.
+### Verification state (honest)
+- Run and passing in the agent sandbox: engine, twentynine, poker, themind, results, scrub, spectators, stats, matchqueue, isolation, email, cleanup, db, production, smoke, private-tables (all DB-free), `npm run build`, `git diff --check`; Playwright layout checks of the lobby/friends UI with mocked API/WebSocket.
+- **NOT run (no PostgreSQL server in the sandbox): every `*.pg.test.js`**, including the new host-change and presence scenarios in `tests/private-tables.pg.test.js`. Run `npm run test:pg` against a disposable database before trusting them.
+- Known gaps: removing a friend revokes invitations and blocks new joins, but does not remove someone who is already seated/watching; presence is per server instance; an unfinished mobile Wizard-header experiment is kept in `git stash` (A3 is already on main, so it is probably obsolete).
 
-## Known issues
-- `tests/matches.pg.test.js`, `session.pg.test.js`, `account.pg.test.js` were written without being able to run them; expect small fixes on first CI run.
-- The in-memory match store (no DATABASE_URL) keeps every match for the life of the process.
-- The UI layout test covers the table screens (header, seats, trump corner) only, not lobby/home/modals.
-- PG-backed tests unexecuted in the agent sandbox (see above).
-- `players` and `tokens` maps in server.js are per process: with several server instances, sockets of a revoked session are only closed by the instance that handled the HTTP request; the others refuse the session at the next (re)connect because `handleHello` re-checks the database.
+## Stage 7 (owner-requested follow-ups on this branch)
+
+Each stage is one commit; resume from the first stage that is not marked done.
+
+- **7.0 / 7.1 (done, commit a41cdf2)**: friend-removal and notification fixes; per-connection ping (`latency` WebSocket message, `tests/ping.test.js`); ping badge on your own profile, on a friend's profile and in the friends list (`pingBadge` in `public/app.js`).
+- **7.2 (done, commit 3f3b716)**: player card - tap any seat at a table (or press Enter/Space on it) to open a card with the handle, ping and record, plus Add friend / Remove friend / profile / mute; guests and bots offer no friend actions (`openPlayerCard`).
+- **7.3 (done, this commit)**: profile picture update.
+  - `POST /api/me/avatar` (`lib/accountRoutes.js`): signed-in only, CSRF, rate limit `RL_ME_AVATAR_LIMIT` (60/h), body `{ avatar }` must be one of the server's fixed `AVATARS`; stored by `db/account.js` `updateAvatar`. The live table (seat, spectator list) updates through `onProfileChanged({ playerId, avatar })` in `server.js`.
+  - Client: one `changeAvatar()` shared by the lobby picker and the Edit-profile dialog; signed-in players save through the API (the old picture comes back with the server's reason if it refuses), guests keep the socket-only path; the profile page header refreshes without a reload.
+  - Decision for the owner: pictures are still the fixed emoji set. Uploading real photos needs image validation, size limits, storage and serving, and moderation; it is deliberately not started. Say if you want it as its own stage.
+  - Tests: new case in `tests/account.pg.test.js` (validation, CSRF, 401 when signed out, DB row, own and public profile, new socket's welcome); two cases in `tests/ui/social-ui.js` (saves and updates header; refused change reverts and shows the reason).
+  - Verified here: `npm run build`; `tests/ui/social-ui.js` 9/9 (Playwright, mocked API); `db/account.updateAvatar` run against a real local PostgreSQL 16 with all 8 migrations applied (bad values -> 400, unknown account -> 404, success persisted); engine, twentynine, poker, themind, results, scrub, cleanup unit suites.
+  - NOT run here: `tests/account.pg.test.js` (needs the `ws` and argon2 packages, which this sandbox cannot install: the npm registry is blocked), so the new route-level case is only syntax-checked. Run `npm run test:pg` before merging.
+- **7.4a (done)**: refactor with identical behavior: one `avatar(m, cls)` helper replaces five hand-written avatar spans; one `adoptPlayer()` replaces three copies of the sign-in state block (session restore, login, register). `app.js` 1824 -> 1816 lines. Checked: `node --check`, `social-ui.js` 9/9, `wizard-layout.js` all viewports ok (one earlier run reported "1 viewport(s) failed" once and was clean on the immediate re-run; not reproduced, cause not captured - watch for it).
+- **7.4b (done)**: friends panel polish (checked with real screenshots at 390px): "Friend requests" and "Table invitations" render only when there is something in them (no more empty "No pending ..." blocks), and a row with one button keeps it beside the name instead of a full-width button (`:has(.btn ~ .btn)` wraps only Accept/Decline rows). Home friends block is roughly 40% shorter on a phone. Checked: `social-ui.js` 9/9.
+- **7.4+ (next)**: more UX/UI polish (see "Next step").
+
+## Remaining Stage 6 work
+
+- **S6.2 — Friends System:** Complete any remaining friend-search/request/list/remove UX and authorization behavior without duplicating the existing backend. Audit actual shipped behavior and agree the exact scope before changes.
+- **S6.3–S6.5 — Private tables:** Stage 6.1 currently stores invitation metadata and lifecycle only; it does not authorize private-room joins, hide private rooms from public discovery, provide invite UX/share links, or handle related room lifecycle/presence. Define each remaining stage from the project roadmap, then implement in order with API, WebSocket, UI, and race/security tests.
+- Once scope is grounded, deliver each stage with focused and full test suites, accurate progress notes, and separate commits/pushes to this branch. Never merge to `main`; stop after Stage 6 for the requested review.
 
 ## Next step
-Run `npm run test:pg` locally or read the CI result for this branch and fix anything in the new pg tests (written but never executed). Then B1 (friends DB + API).
+Stage 7.4c onward: UX/UI refactor of `public/app.js` (one ~1800-line IIFE): remove duplicated friend/avatar markup helpers, split rendering helpers into small named functions, keep behavior identical and re-run `node tests/ui/social-ui.js` and `node tests/ui/wizard-layout.js` (use `NODE_PATH=$(npm root -g)` for Playwright) after every change. Then run `npm run test:pg` against a disposable PostgreSQL before merging.

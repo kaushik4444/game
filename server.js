@@ -16,6 +16,7 @@ const { makeAuthEmailSender } = require('./lib/email');
 const { createAuthRoutes } = require('./lib/authRoutes');
 const dbAccount = require('./db/account');
 const { DELETED_NAME } = dbAccount;
+const dbFriends = require('./db/friends');
 const { scrubText } = require('./games/scrub');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -87,6 +88,28 @@ function start(opts = {}) {
   const players = new Map(); // id -> player
   const tokens = new Map(); // secret token -> player
   const rooms = new Map(); // code -> room
+  const presence = new Map(); // player id -> { online, lastSeen }; best-effort and instance-local
+  // What a friend may see: online now (a live socket), when they were last seen, and WHICH GAME they are playing (never the
+  // table code, so presence cannot be used to find a private table).
+  const playingAt = (id) => {
+    const q = players.get(id);
+    const room = q && q.room ? rooms.get(q.room) : null;
+    return room && room.status === 'playing' && room.members.some((m) => m.id === id && !m.bot) ? room.gameId : null;
+  };
+  const presenceView = {
+    get: (id) => {
+      const q = players.get(id);
+      const online = Boolean(q && q.connected);
+      return { online, lastSeen: (presence.get(id) || {}).lastSeen || null, playing: online ? playingAt(id) : null, ping: online && q ? q.pingMs ?? null : null };
+    },
+  };
+  const presenceTimers = new Map();
+  function schedulePresence(id) { // debounced: evaluated after the table state has settled
+    if (!id || !dbPool.hasDatabase() || presenceTimers.has(id)) return;
+    const timer = setTimeout(() => { presenceTimers.delete(id); publishPresence(id); }, 150);
+    if (timer.unref) timer.unref();
+    presenceTimers.set(id, timer);
+  }
   let purgeTimer = null;
   let spoolTimer = null;
 
@@ -137,10 +160,20 @@ function start(opts = {}) {
     emailSender,
     sendJson,
     readJsonBody,
+    avatars: AVATARS,
     log: opts.log || console,
     // a signed-out or reset account must not keep playing on an already open socket
     // Is this table code still open on this server? ('lobby' | 'playing' | null). Used to drop stale recent tables.
     tableStatus: (code) => { const r = rooms.get(code); return r ? r.status : null; },
+    friendsContext: {
+      presence: presenceView,
+      validateRoomInvite: async (inviterId, gameId, roomCode) => {
+        const room = rooms.get(roomCode);
+        const player = players.get(inviterId);
+        return Boolean(room && player && room.visibility === 'private' && room.status === 'lobby' && room.gameId === gameId && room.hostId === inviterId && player.room === roomCode);
+      },
+      onEvent: (event) => (event.type === 'friend-removed' ? onFriendRemoved(event.playerId, event.friendId) : notifyAccount(event.playerId, event)),
+    },
     // Close this player's sockets that were opened with a session that no longer exists. `token` limits it to one
     // session (logout); `exceptToken` spares the session that was just created (a new login retires the old ones, 4002).
     onSignedOut: ({ playerId, token, exceptToken }) => {
@@ -151,17 +184,24 @@ function start(opts = {}) {
         ws.close(exceptToken ? 4002 : 4001, exceptToken ? 'signed in elsewhere' : 'signed out');
       }
     },
-    // the display name was changed over HTTP (profile page): same effect as the lobby's own rename
-    onProfileChanged: ({ playerId, displayName }) => {
+    // the display name and/or avatar was changed over HTTP (profile page): same effect as the lobby's own change
+    onProfileChanged: ({ playerId, displayName, avatar }) => {
       const p = players.get(playerId);
       if (!p) return;
-      p.name = displayName;
+      if (displayName) p.name = displayName;
+      if (avatar && AVATARS.includes(avatar)) p.avatar = avatar;
       const room = rooms.get(p.room);
       if (!room) return;
       const m = room.members.find((x) => x.id === p.id);
-      if (m && room.status !== 'playing') m.name = p.name; // a running game keeps the names it started with
+      if (m) {
+        if (displayName && room.status !== 'playing') m.name = p.name; // a running game keeps the names it started with
+        if (avatar && AVATARS.includes(avatar)) m.avatar = p.avatar;
+      }
       const s = room.spectators.find((x) => x.id === p.id);
-      if (s) s.name = p.name;
+      if (s) {
+        if (displayName) s.name = p.name;
+        if (avatar && AVATARS.includes(avatar)) s.avatar = p.avatar;
+      }
       broadcast(room);
     },
     // the account no longer exists: leave the table, close the socket, forget the player on this server
@@ -265,7 +305,76 @@ function start(opts = {}) {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
   };
   const sendError = (p, message) => send(p.ws, { t: 'error', message });
+  function notifyAccount(playerId, event) {
+    const recipient = players.get(playerId);
+    if (!recipient || !recipient.connected) return; // live-only; DB records remain authoritative
+    const text = {
+      'friend-request': 'You have a new friend request.',
+      'friend-accepted': 'Your friend request was accepted.',
+      'table-invitation': 'You have a new private-table invitation.',
+    }[event.type];
+    if (!text) return;
+    send(recipient.ws, { t: 'socialNotice', kind: event.type, text, invitationId: event.invitationId });
+  }
+  /**
+   * A friendship ended. Private tables that are still gathering (lobby) lose the person who no longer has access: they
+   * are taken out with a notice. A game already under way is left alone (their seat is theirs until they leave), but
+   * they cannot come back to it once they have left.
+   */
+  function onFriendRemoved(a, b) {
+    for (const room of [...rooms.values()]) {
+      if (room.visibility !== 'private' || room.status !== 'lobby') continue;
+      for (const [host, guest] of [[a, b], [b, a]]) {
+        if (room.hostId !== host) continue;
+        const q = players.get(guest);
+        if (!q || q.room !== room.code) continue;
+        leaveRoom(q);
+        if (q.connected) {
+          send(q.ws, { t: 'left' });
+          send(q.ws, { t: 'notice', text: 'You are no longer friends with the host, so you left their private table.' });
+        }
+      }
+    }
+    publishPresence(a);
+    publishPresence(b);
+  }
+  async function publishPresence(playerId) {
+    if (!dbPool.hasDatabase()) return; // friends exist only with PostgreSQL
+    try {
+      const friends = await dbFriends.listFriends(playerId, presenceView);
+      const owner = players.get(playerId);
+      if (owner && owner.connected) send(owner.ws, { t: 'socialPresence', friends });
+      for (const friend of friends) {
+        const recipient = players.get(friend.id);
+        if (recipient && recipient.connected) send(recipient.ws, {
+          t: 'socialPresence', playerId,
+          online: presenceView.get(playerId).online,
+          lastSeen: presenceView.get(playerId).lastSeen,
+          playing: presenceView.get(playerId).playing,
+          ping: presenceView.get(playerId).ping,
+        });
+      }
+    } catch (err) {
+      console.error('[server] presence update failed:', err.message);
+    }
+  }
+  async function canEnterRoom(p, room) {
+    if (room.visibility === 'public' || room.hostId === p.id || (room.hosts && room.hosts.has(p.id))) return true;
+    // already seated or watching: access was checked when they came in; a reconnect must not strand their seat
+    if (room.members.some((m) => m.id === p.id && !m.bot) || room.spectators.some((x) => x.id === p.id)) return true;
+    if (!dbPool.hasDatabase() || p.isAnonymous) return false;
+    try {
+      return await dbFriends.canJoinPrivateRoom(p.id, room.code, room.gameId, [...new Set([room.hostId, ...(room.hosts || [])])]);
+    } catch (err) {
+      console.error('[server] private room authorization failed:', err.message);
+      return false;
+    }
+  }
   const isConnected = (m) => m.bot || !!players.get(m.id)?.connected;
+  /** The public @handle of a registered human at the table (null for bots, guests and anonymous players). */
+  const usernameOf = (m) => (m.bot ? null : (players.get(m.id) || {}).username || null);
+  /** Smoothed round-trip time in ms of a connected human (null for bots and people who are offline or not measured yet). */
+  const pingOf = (m) => { if (m.bot) return null; const q = players.get(m.id); return q && q.connected && Number.isFinite(q.pingMs) ? q.pingMs : null; };
   const humans = (room) => room.members.filter((m) => !m.bot);
   const isSpec = (room, id) => room.spectators.some((s) => s.id === id);
   /** Everybody who should receive table updates: seated humans and spectators. */
@@ -285,8 +394,8 @@ function start(opts = {}) {
       min: def.seats.min,
       max: def.seats.max,
       seatLabels: def.seatLabel ? Array.from({ length: room.seats }, (_, i) => def.seatLabel(i, room.seats)) : null,
-      members: room.members.map((m) => ({ id: m.id, name: m.name, bot: m.bot, avatar: m.avatar, connected: isConnected(m) })),
-      spectators: room.spectators.map((s) => ({ id: s.id, name: s.name, avatar: s.avatar, connected: isConnected(s) })),
+      members: room.members.map((m) => ({ id: m.id, name: m.name, bot: m.bot, avatar: m.avatar, connected: isConnected(m), ping: pingOf(m), username: usernameOf(m) })),
+      spectators: room.spectators.map((s) => ({ id: s.id, name: s.name, avatar: s.avatar, connected: isConnected(s), ping: pingOf(s), username: usernameOf(s) })),
       deadline: room.status === 'playing' ? room.deadline : null, // epoch ms when the awaited human(s) get auto-played
       now: Date.now(), // lets clients correct for clock differences
     };
@@ -383,6 +492,7 @@ function start(opts = {}) {
     if (g) {
       if (g.isOver() && room.status !== 'finished') {
         room.status = 'finished';
+        for (const m of humans(room)) schedulePresence(m.id);
         // Persist the completed match once (the status guard above plus the per-game key make a second attempt a no-op)
         try {
           const record = buildMatchRecord(room, g);
@@ -488,6 +598,8 @@ function start(opts = {}) {
   function destroyRoom(room) {
     clearTimeout(room.timer);
     rooms.delete(room.code);
+    for (const m of humans(room)) schedulePresence(m.id);
+    if (dbPool.hasDatabase()) dbFriends.expireClosedRoomInvitations(room.code).catch((err) => console.error('[server] invitation cleanup failed:', err.message));
     broadcastTables();
     for (const m of viewers(room)) {
       const p = players.get(m.id);
@@ -513,6 +625,7 @@ function start(opts = {}) {
     const next = cands.find(isConnected) || (cur && cur.id !== leaving ? null : cands[0]);
     if (!next || next.id === room.hostId) return false;
     room.hostId = next.id;
+    (room.hosts || (room.hosts = new Set())).add(next.id);
     sys(room, `👑 ${next.name} is now the host`);
     const q = players.get(next.id);
     if (q && q.connected) send(q.ws, { t: 'notice', text: '👑 You are now the host of this table' });
@@ -556,6 +669,7 @@ function start(opts = {}) {
       room.spectators.shift();
       room.members.push({ id: heir.id, name: heir.name, avatar: heir.avatar, bot: false });
       room.hostId = heir.id;
+      (room.hosts || (room.hosts = new Set())).add(heir.id);
       sys(room, `👑 ${heir.name} took a seat and is now the host`);
     } else if (wasHost) ensureHost(room, { leaving: p.id });
     broadcast(room);
@@ -580,6 +694,7 @@ function start(opts = {}) {
 
   // Tables a player sits at or watches are remembered on their account (shown as "Recent tables" on any device).
   const RECENT_ON = new Set(['create', 'join', 'sit']);
+  const PRESENCE_ON = new Set(['create', 'join', 'sit', 'leave', 'start', 'rematch']);
   function trackRecent(p) {
     const room = rooms.get(p.room);
     if (!room) return;
@@ -674,6 +789,7 @@ function start(opts = {}) {
         gameId: def.id,
         visibility: msg.visibility === 'public' ? 'public' : 'private',
         hostId: p.id,
+        hosts: new Set([p.id]), // everyone who has hosted this table: their accepted invitations stay valid after a host change
         status: 'lobby',
         seats: def.seats.default,
         options: sanitizeOptions(def, {}),
@@ -693,11 +809,12 @@ function start(opts = {}) {
       sendChatLog(p, room);
     },
 
-    join(p, msg) {
+    async join(p, msg) {
       const code = typeof msg.code === 'string' ? msg.code.trim().toUpperCase() : '';
       const room = rooms.get(code);
       applyProfile(p, msg);
       if (!room) return sendError(p, `No table with code ${code || '?'}`);
+      if (!await canEnterRoom(p, room)) return sendError(p, 'This private table requires an accepted invitation.');
       const seat = room.members.find((m) => m.id === p.id);
       // Already at this table (seated, or watching): nothing to add. This is decided BEFORE any capacity check, so a full
       // table or a full spectator list never turns away someone who is already in it, and no second "joined/watching"
@@ -759,9 +876,11 @@ function start(opts = {}) {
       sendChatLog(p, room);
     },
 
-    sit(p) {
+    async sit(p) {
       const room = rooms.get(p.room);
       if (!room || room.status !== 'lobby' || !isSpec(room, p.id)) return sendError(p, 'Not possible right now');
+      if (!await canEnterRoom(p, room)) return sendError(p, 'This private table requires an accepted invitation.');
+
       if (room.members.length >= room.seats) return sendError(p, 'There is no open seat');
       room.spectators.splice(room.spectators.findIndex((s) => s.id === p.id), 1);
       addMember(room, p);
@@ -970,14 +1089,18 @@ function start(opts = {}) {
           p.token = presentedToken;
           p.name = dbPlayer.display_name;
           p.avatar = dbPlayer.avatar;
+          p.username = dbPlayer.username || null;
           p.createdAt = dbPlayer.created_at;
+          p.isAnonymous = Boolean(dbPlayer.is_anonymous);
         } else {
           p = {
             id: dbPlayer.id,
             token: presentedToken,
             name: dbPlayer.display_name,
             avatar: dbPlayer.avatar,
+            username: dbPlayer.username || null,
             createdAt: dbPlayer.created_at,
+            isAnonymous: Boolean(dbPlayer.is_anonymous),
             room: null,
             ws: null,
             connected: false,
@@ -1022,11 +1145,12 @@ function start(opts = {}) {
     }
     p.ws = ws;
     p.connected = true;
+    p.pingMs = null; // measured again on this connection
     ws.player = p;
     send(ws, { t: 'welcome', id: p.id, token: includeDebugTokens ? p.token : undefined, name: p.name, avatar: p.avatar, avatars: AVATARS, emotes: EMOTES, games: games.list(), tables: publicTables(), rejoin: rejoinFor(p), announcement });
     clearTimeout(p.dropTimer);
     const room = rooms.get(p.room);
-    if (room) {
+    if (room && await canEnterRoom(p, room)) {
       if (p.dropAnnounced) {
         p.dropAnnounced = false;
         sys(room, `📶 ${p.name} reconnected`);
@@ -1035,7 +1159,15 @@ function start(opts = {}) {
       broadcast(room);
       sendChatLog(p, room);
       schedule(room);
-    } else p.room = null;
+    } else {
+      if (room) {
+        p.room = null;
+        send(ws, { t: 'left' });
+        send(ws, { t: 'error', message: 'This private table requires an accepted invitation.' });
+      } else p.room = null;
+    }
+    presence.set(p.id, { online: true, lastSeen: presence.get(p.id)?.lastSeen || null });
+    publishPresence(p.id);
   }
 
   wss.on('connection', (ws, req) => {
@@ -1052,7 +1184,17 @@ function start(opts = {}) {
     ws.isAlive = true;
     ws.player = null;
     ws.msgs = 0;
-    ws.on('pong', () => (ws.isAlive = true));
+    ws.on('pong', (data) => {
+      ws.isAlive = true;
+      // a latency probe answers with the id it carried; the keep-alive ping has no payload
+      const tag = data && data.length ? String(data) : '';
+      if (tag === 'p' + ws.probeId && ws.probeSentAt && ws.player) {
+        const ms = Math.max(0, Math.min(9999, Date.now() - ws.probeSentAt));
+        const q = ws.player;
+        q.pingMs = Number.isFinite(q.pingMs) ? Math.round(q.pingMs * 0.6 + ms * 0.4) : ms; // smoothed: one slow packet does not look like a bad connection
+        send(ws, { t: 'latency', ms: q.pingMs });
+      }
+    });
     ws.on('message', (raw) => {
       if (++ws.msgs > maxMsgsPerSec) return ws.close(1008, 'slow down'); // flood guard; counter is reset every second
       let msg;
@@ -1072,15 +1214,24 @@ function start(opts = {}) {
       }
       const p = ws.player;
       if (!p || !Object.hasOwn(handlers, msg.t)) return;
-      try {
-        const before = p.room;
-        handlers[msg.t](p, msg);
-        // remember a table only when this message really put the player at it (a refused join leaves p.room alone)
-        if (RECENT_ON.has(msg.t) && p.room && (p.room !== before || (msg.t === 'join' && String(msg.code || '').trim().toUpperCase() === p.room))) trackRecent(p);
-      } catch (e) {
-        console.error('handler error', msg.t, e);
-        sendError(p, 'Something went wrong');
-      }
+      const run = async () => {
+        try {
+          const before = p.room;
+          await handlers[msg.t](p, msg);
+          if (PRESENCE_ON.has(msg.t)) {
+            schedulePresence(p.id);
+            const at = rooms.get(p.room);
+            if (at && msg.t === 'start') for (const m of humans(at)) schedulePresence(m.id);
+          }
+          if (RECENT_ON.has(msg.t) && p.room && (p.room !== before || (msg.t === 'join' && String(msg.code || '').trim().toUpperCase() === p.room))) trackRecent(p);
+        } catch (e) {
+          console.error('handler error', msg.t, e);
+          sendError(p, 'Something went wrong');
+        }
+      };
+      // one message at a time per socket: a join that waits for the database must finish before the next message
+      // (act, chat, leave...) is looked at, exactly as when every handler was synchronous
+      ws.queue = (ws.queue || Promise.resolve()).then(run);
     });
     ws.on('close', () => {
       const p = ws.player;
@@ -1088,6 +1239,9 @@ function start(opts = {}) {
       p.ws = null;
       p.connected = false;
       p.lastSeen = Date.now();
+      presence.set(p.id, { online: false, lastSeen: new Date(p.lastSeen).toISOString() });
+      dbAccount.updatePresence(p.id).catch(() => {});
+      publishPresence(p.id);
       const room = rooms.get(p.room);
       if (room) {
         broadcast(room);
@@ -1102,6 +1256,11 @@ function start(opts = {}) {
   const ticker = setInterval(() => {
     for (const ws of wss.clients) {
       ws.msgs = 0;
+      if (ws.player && (!ws.probeSentAt || Date.now() - ws.probeSentAt >= 8000)) {
+        ws.probeId = (ws.probeId || 0) + 1;
+        ws.probeSentAt = Date.now();
+        try { ws.ping('p' + ws.probeId); } catch { /* the socket is closing */ }
+      }
       if (!ws.pingAt || Date.now() - ws.pingAt > 30000) {
         if (ws.isAlive === false) {
           ws.terminate();

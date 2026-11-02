@@ -113,6 +113,26 @@ function socket(port, cookie) {
       s.ws.close();
     });
 
+    await test('profile picture: only the fixed avatars, own account only, CSRF protected, saved and visible everywhere', async () => {
+      const u = await newUser('Pic', 'Pic One');
+      const post = (avatar, opts) => u.browser.post('/api/me/avatar', { avatar }, opts);
+      for (const bad of ['💀', '', null, 42, {}, ['🦊'], '🦊🦊', 'x'.repeat(200)]) assert.equal((await post(bad)).status, 400, JSON.stringify(bad));
+      assert.equal((await post('🦊', { csrf: false })).status, 403);
+      const anon = new Browser(srv.port); await anon.csrf();
+      assert.equal((await anon.post('/api/me/avatar', { avatar: '🦊' })).status, 401, 'signed-out callers are refused');
+      const ok = await post('🦊');
+      assert.equal(ok.status, 200);
+      assert.equal(ok.json.avatar, '🦊');
+      assert.equal((await q('SELECT avatar FROM players WHERE id = $1', [u.id]))[0].avatar, '🦊');
+      assert.equal((await u.browser.get('/api/me/profile')).json.profile.avatar, '🦊');
+      const pub = await anon.get('/api/players/' + u.username);
+      assert.equal(pub.json.profile.avatar, '🦊');
+      const s = socket(srv.port, u.cookie);
+      await until(() => s.welcome(), 'welcome');
+      assert.equal(s.welcome().avatar, '🦊');
+      s.ws.close();
+    });
+
     // ------------------------------------------------------------------------------------------ history and statistics
     console.log('history and statistics');
     await test('history lists only real finished games, newest first, in pages; statistics count only what should count', async () => {
