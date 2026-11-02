@@ -511,9 +511,9 @@
       ${S.socialError ? `<p class="social-error" role="alert">${esc(S.socialError)}</p>` : ''}${S.socialNotice ? `<p class="social-notice" role="status">${esc(S.socialNotice)}</p>` : ''}${S.socialLoading ? '<p class="hint">Loading friends…</p>' : ''}
       <form id="friendSearchForm" class="social-search"><label class="sr-only" for="friendSearch">Search by username</label><input id="friendSearch" minlength="1" maxlength="24" autocomplete="off" placeholder="Find someone by username" value="${esc(S.friendQuery)}"><button class="btn small" type="submit" ${S.friendSearchBusy ? 'disabled' : ''}>Search</button></form>
       ${resultHTML ? `<ul class="social-list">${resultHTML}</ul>` : (S.friendQuery && !S.friendSearchBusy ? '<p class="hint">No new players found.</p>' : '')}
-      <h3>Friend requests</h3>${incoming || outgoing ? `<ul class="social-list">${incoming}${outgoing}</ul>` : '<p class="hint">No pending friend requests.</p>'}
+      ${incoming || outgoing ? `<h3>Friend requests</h3><ul class="social-list">${incoming}${outgoing}</ul>` : ''}
       <h3>Your friends</h3>${friends ? `<ul class="social-list">${friends}</ul>` : '<p class="hint">No friends yet. Search for a username to add someone.</p>'}
-      <h3>Table invitations</h3>${invites ? `<ul class="social-list">${invites}</ul>` : '<p class="hint">No pending invitations.</p>'}${sent ? `<details><summary>Sent invitations</summary><ul class="social-list">${sent}</ul></details>` : ''}
+      ${invites ? `<h3>Table invitations</h3><ul class="social-list">${invites}</ul>` : ''}${sent ? `<details><summary>Sent invitations</summary><ul class="social-list">${sent}</ul></details>` : ''}
     </section>`;
   }
 

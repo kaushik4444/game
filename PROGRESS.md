@@ -58,7 +58,8 @@ Each stage is one commit; resume from the first stage that is not marked done.
   - Verified here: `npm run build`; `tests/ui/social-ui.js` 9/9 (Playwright, mocked API); `db/account.updateAvatar` run against a real local PostgreSQL 16 with all 8 migrations applied (bad values -> 400, unknown account -> 404, success persisted); engine, twentynine, poker, themind, results, scrub, cleanup unit suites.
   - NOT run here: `tests/account.pg.test.js` (needs the `ws` and argon2 packages, which this sandbox cannot install: the npm registry is blocked), so the new route-level case is only syntax-checked. Run `npm run test:pg` before merging.
 - **7.4a (done)**: refactor with identical behavior: one `avatar(m, cls)` helper replaces five hand-written avatar spans; one `adoptPlayer()` replaces three copies of the sign-in state block (session restore, login, register). `app.js` 1824 -> 1816 lines. Checked: `node --check`, `social-ui.js` 9/9, `wizard-layout.js` all viewports ok (one earlier run reported "1 viewport(s) failed" once and was clean on the immediate re-run; not reproduced, cause not captured - watch for it).
-- **7.4+ (next)**: more UX/UI refactor and polish (see "Next step").
+- **7.4b (done)**: friends panel polish (checked with real screenshots at 390px): "Friend requests" and "Table invitations" render only when there is something in them (no more empty "No pending ..." blocks), and a row with one button keeps it beside the name instead of a full-width button (`:has(.btn ~ .btn)` wraps only Accept/Decline rows). Home friends block is roughly 40% shorter on a phone. Checked: `social-ui.js` 9/9.
+- **7.4+ (next)**: more UX/UI polish (see "Next step").
 
 ## Remaining Stage 6 work
 
@@ -67,4 +68,4 @@ Each stage is one commit; resume from the first stage that is not marked done.
 - Once scope is grounded, deliver each stage with focused and full test suites, accurate progress notes, and separate commits/pushes to this branch. Never merge to `main`; stop after Stage 6 for the requested review.
 
 ## Next step
-Stage 7.4: UX/UI refactor of `public/app.js` (one ~1800-line IIFE): remove duplicated friend/avatar markup helpers, split rendering helpers into small named functions, keep behavior identical and re-run `node tests/ui/social-ui.js` and `node tests/ui/wizard-layout.js` (use `NODE_PATH=$(npm root -g)` for Playwright) after every change. Then run `npm run test:pg` against a disposable PostgreSQL before merging.
+Stage 7.4c onward: UX/UI refactor of `public/app.js` (one ~1800-line IIFE): remove duplicated friend/avatar markup helpers, split rendering helpers into small named functions, keep behavior identical and re-run `node tests/ui/social-ui.js` and `node tests/ui/wizard-layout.js` (use `NODE_PATH=$(npm root -g)` for Playwright) after every change. Then run `npm run test:pg` against a disposable PostgreSQL before merging.
