@@ -443,3 +443,19 @@ html { scroll-behavior: auto; }
 .ping::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: currentColor; }
 .ping.q-great { color: #5fe0a0; } .ping.q-good { color: #a6e05f; } .ping.q-fair { color: #f2c14e; } .ping.q-poor { color: #ff7a6b; } .ping.none { color: var(--muted); }
 .pp-conn { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+
+/* tap a player at the table */
+.pseat[data-act="playerCard"] { cursor: pointer; border-radius: 14px; -webkit-tap-highlight-color: transparent; }
+.pseat[data-act="playerCard"]:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+@media (hover: hover) { .pseat[data-act="playerCard"]:hover .plate { border-color: rgba(255, 255, 255, .55); } }
+.pcard-head { display: flex; align-items: center; gap: 14px; }
+.pcard-head h3 { margin: 0; font-size: 20px; overflow-wrap: anywhere; }
+.pcard-head p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+.pcard-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
+.pcard-stats > div { text-align: center; padding: 8px 4px; border-radius: 12px; background: var(--panel); }
+.pcard-stats b { display: block; font-size: 20px; }
+.pcard-stats span { font-size: 12px; color: var(--muted); }
+.pcard-actions { display: grid; gap: 8px; margin-top: 12px; }
+.pcard-actions .btn { width: 100%; justify-content: center; }
+.pcard-note { color: var(--muted); font-size: 13px; margin: 8px 0 0; text-align: left; }
+.pcard-actions a.btn { display: flex; align-items: center; justify-content: center; text-decoration: none; color: inherit; }

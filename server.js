@@ -363,6 +363,8 @@ function start(opts = {}) {
     }
   }
   const isConnected = (m) => m.bot || !!players.get(m.id)?.connected;
+  /** The public @handle of a registered human at the table (null for bots, guests and anonymous players). */
+  const usernameOf = (m) => (m.bot ? null : (players.get(m.id) || {}).username || null);
   /** Smoothed round-trip time in ms of a connected human (null for bots and people who are offline or not measured yet). */
   const pingOf = (m) => { if (m.bot) return null; const q = players.get(m.id); return q && q.connected && Number.isFinite(q.pingMs) ? q.pingMs : null; };
   const humans = (room) => room.members.filter((m) => !m.bot);
@@ -384,8 +386,8 @@ function start(opts = {}) {
       min: def.seats.min,
       max: def.seats.max,
       seatLabels: def.seatLabel ? Array.from({ length: room.seats }, (_, i) => def.seatLabel(i, room.seats)) : null,
-      members: room.members.map((m) => ({ id: m.id, name: m.name, bot: m.bot, avatar: m.avatar, connected: isConnected(m), ping: pingOf(m) })),
-      spectators: room.spectators.map((s) => ({ id: s.id, name: s.name, avatar: s.avatar, connected: isConnected(s), ping: pingOf(s) })),
+      members: room.members.map((m) => ({ id: m.id, name: m.name, bot: m.bot, avatar: m.avatar, connected: isConnected(m), ping: pingOf(m), username: usernameOf(m) })),
+      spectators: room.spectators.map((s) => ({ id: s.id, name: s.name, avatar: s.avatar, connected: isConnected(s), ping: pingOf(s), username: usernameOf(s) })),
       deadline: room.status === 'playing' ? room.deadline : null, // epoch ms when the awaited human(s) get auto-played
       now: Date.now(), // lets clients correct for clock differences
     };
@@ -1079,6 +1081,7 @@ function start(opts = {}) {
           p.token = presentedToken;
           p.name = dbPlayer.display_name;
           p.avatar = dbPlayer.avatar;
+          p.username = dbPlayer.username || null;
           p.createdAt = dbPlayer.created_at;
           p.isAnonymous = Boolean(dbPlayer.is_anonymous);
         } else {
@@ -1087,6 +1090,7 @@ function start(opts = {}) {
             token: presentedToken,
             name: dbPlayer.display_name,
             avatar: dbPlayer.avatar,
+            username: dbPlayer.username || null,
             createdAt: dbPlayer.created_at,
             isAnonymous: Boolean(dbPlayer.is_anonymous),
             room: null,

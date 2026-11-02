@@ -739,6 +739,7 @@
         break;
       }
       case 'left':
+        S.card = null; closeModal();
         S.page = 'home';
         loadRecent();
         S.room = null;
@@ -799,6 +800,7 @@
   window.addEventListener('popstate', () => { if (!S.room) applyRoute(); });
 
   document.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('.pseat[role="button"]')) { e.preventDefault(); openPlayerCard(e.target.dataset.pid); return; }
     if (e.key !== 'Escape') return;
     if (S.auth) closeOverlay();
     else if (document.getElementById('modal-overlay')) closeModal();
@@ -942,6 +944,79 @@
     }), 0);
   }
 
+
+  // ------------------------------------------------------------ player card (tap a player at the table)
+  const sameName = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+  /** How you and this person are connected right now: me | bot | guest | friend | outgoing | incoming | none. */
+  function relationTo(person) {
+    if (!person) return { kind: 'gone' };
+    if (person.id === S.id) return { kind: 'me' };
+    if (person.bot) return { kind: 'bot' };
+    if (!person.username) return { kind: 'guest' };
+    const friend = (S.friends || []).find((f) => sameName(f.username, person.username));
+    if (friend) return { kind: 'friend', friend };
+    const out = ((S.friendRequests || {}).outgoing || []).find((r) => sameName(r.username, person.username));
+    if (out) return { kind: 'outgoing', request: out };
+    const inc = ((S.friendRequests || {}).incoming || []).find((r) => sameName(r.username, person.username));
+    if (inc) return { kind: 'incoming', request: inc };
+    return { kind: 'none' };
+  }
+  const roomPerson = (pid) => S.room && [...(S.room.members || []), ...(S.room.spectators || [])].find((x) => x.id === pid);
+
+  function cardHTML() {
+    const C = S.card;
+    const person = roomPerson(C.pid) || C.last;
+    if (!person) return '<p class="hint">This player is no longer at the table.</p>';
+    C.last = person;
+    const rel = relationTo(person);
+    const here = Boolean(roomPerson(C.pid));
+    const prof = C.profile;
+    const stats = prof ? `<div class="pcard-stats"><div><b>${prof.played}</b><span>Games</span></div><div><b>${prof.wins}</b><span>Wins</span></div><div><b>${prof.winRate === null ? '–' : prof.winRate + '%'}</b><span>Win rate</span></div></div>` : '';
+    const sub = person.bot ? 'Bot' : person.username ? `@${esc(person.username)}` : 'Guest player';
+    const conn = !person.bot && here ? `<p class="pp-conn">📶 ${person.connected === false ? 'Disconnected' : pingBadge(person.ping, { label: true })}</p>` : '';
+    const busy = C.busy ? ' disabled' : '';
+    const add = [];
+    if (rel.kind === 'none') add.push(`<button type="button" class="btn"${busy} data-modal-act="cardAdd">➕ Add friend</button>`);
+    if (rel.kind === 'outgoing') add.push(`<button type="button" class="btn ghost"${busy} data-modal-act="cardCancel">⏳ Request sent · Cancel</button>`);
+    if (rel.kind === 'incoming') add.push(`<button type="button" class="btn"${busy} data-modal-act="cardAccept">✔ Accept friend request</button>`, `<button type="button" class="btn ghost"${busy} data-modal-act="cardDecline">Decline</button>`);
+    if (rel.kind === 'friend') add.push('<p class="pcard-note">✔ You are friends.</p>', `<button type="button" class="btn ghost"${busy} data-modal-act="cardRemove">Remove friend</button>`);
+    if (rel.kind === 'guest') add.push('<p class="pcard-note">Guests have no username, so they cannot be added as friends.</p>');
+    if (rel.kind === 'none' && S.guest) add.length = 0;
+    const others = [];
+    if (rel.kind === 'me') others.push('<button type="button" class="btn ghost" data-modal-act="cardEditMe">Edit my profile</button>');
+    if (person.username && rel.kind !== 'me') others.push(`<a class="btn ghost" href="/#u/${encodeURIComponent(person.username)}" target="_blank" rel="noopener">View full profile</a>`);
+    if (rel.kind !== 'me' && rel.kind !== 'bot') others.push(`<button type="button" class="btn ghost" data-modal-act="cardMute">${muted.has(person.id) ? '🔔 Unmute in chat' : '🔇 Mute in chat'}</button>`);
+    return `<div class="pcard-head"><span class="avatar big" style="background:${avatarColor(person.name)}">${person.avatar ? esc(person.avatar) : initial(person.name)}</span><div><h3>${esc(person.name)}</h3><p>${sub}${person.id === S.id ? ' · you' : ''}</p>${conn}</div></div>${stats}${C.error ? `<p class="auth-msg" role="alert">${esc(C.error)}</p>` : ''}<div class="pcard-actions">${add.join('')}${others.join('')}</div>${S.guest && rel.kind === 'none' ? '<p class="pcard-note">Log in to add friends.</p>' : ''}`;
+  }
+  function drawCard() {
+    if (!S.card) return;
+    const body = document.querySelector('#modal-overlay .modal-body');
+    if (body && body.dataset.card === S.card.pid) body.innerHTML = cardHTML();
+    else openModal('Player', cardHTML(), (o) => { o.querySelector('.modal-body').dataset.card = S.card.pid; });
+  }
+  function openPlayerCard(pid) {
+    const person = roomPerson(pid);
+    if (!person) return;
+    S.card = { pid, profile: null, busy: false, error: '', last: person };
+    drawCard();
+    if (person.username && !person.bot) {
+      getJson(`/api/players/${encodeURIComponent(person.username)}`)
+        .then((d) => { if (S.card && S.card.pid === pid) { S.card.profile = d.profile; drawCard(); } })
+        .catch(() => { /* the card works without the numbers */ });
+    }
+  }
+  async function cardAction(path, body, success) {
+    const C = S.card; if (!C || C.busy) return;
+    C.busy = true; C.error = ''; drawCard();
+    try {
+      await postJson(path, body);
+      if (success) toast(success);
+      await loadSocial({ quiet: true });
+    } catch (e) { C.error = e.message || 'That did not work. Try again.'; }
+    C.busy = false;
+    drawCard();
+  }
+
   // ------------------------------------------------------------ chat, watchers, turn timer
   const $chat = document.createElement('div');
   $chat.id = 'chat';
@@ -958,7 +1033,12 @@
   $watch.hidden = true;
   document.body.appendChild($watch);
 
+  /** People you muted in chat (kept on this device only). Their messages are hidden for you; nobody is told. */
+  const muted = new Set((() => { try { return JSON.parse(store.get('ct_muted') || '[]').filter((x) => typeof x === 'string').slice(-200); } catch { return []; } })());
+  const saveMuted = () => store.set('ct_muted', JSON.stringify([...muted].slice(-200)));
+
   function msgHTML(m) {
+    if (!m.sys && muted.has(m.id) && m.id !== S.id) return '';
     if (m.sys) return `<div class="msg sys">${esc(m.text)}</div>`;
     const mine = m.id === S.id;
     return `<div class="msg ${mine ? 'mine' : ''}"><span class="mav" style="background:${avatarColor(m.name)}">${m.avatar ? esc(m.avatar) : initial(m.name)}</span><div class="mb"><b>${esc(m.name)}${m.spec ? ' <i title="Spectator">👁</i>' : ''}</b><p>${esc(m.text)}</p></div></div>`;
@@ -981,7 +1061,7 @@
     S.chat.push(m);
     if (S.chat.length > 60) S.chat.shift();
     if (S.chatOpen) drawChat();
-    else if (!m.sys && m.id !== S.id) {
+    else if (!m.sys && m.id !== S.id && !muted.has(m.id)) {
       S.unread++;
       updateBadges();
       CardTable.sound.play('chat');
@@ -1250,7 +1330,15 @@
     return true;
   }
 
-  const modalActions = {};
+  const modalActions = {
+    cardAdd: () => { const p = S.card && S.card.last; if (p && p.username) cardAction('/api/me/friend-requests', { username: p.username }, 'Friend request sent.'); },
+    cardCancel: () => { const r = relationTo(S.card && S.card.last); if (r.request) cardAction('/api/me/friend-requests/cancel', { requestId: r.request.id }); },
+    cardAccept: () => { const r = relationTo(S.card && S.card.last); if (r.request) cardAction('/api/me/friend-requests/accept', { requestId: r.request.id }, 'Friend request accepted.'); },
+    cardDecline: () => { const r = relationTo(S.card && S.card.last); if (r.request) cardAction('/api/me/friend-requests/decline', { requestId: r.request.id }); },
+    cardRemove: () => { const r = relationTo(S.card && S.card.last); if (r.friend && confirm('Remove this friend? Pending invitations between you will be revoked.')) cardAction('/api/me/friends/remove', { friendId: r.friend.id }, 'Friend removed.'); },
+    cardMute: () => { const p = S.card && S.card.last; if (!p) return; if (muted.has(p.id)) muted.delete(p.id); else muted.add(p.id); saveMuted(); drawChat(); drawCard(); },
+    cardEditMe: () => { closeModal(); openEditProfileDialog(); },
+  };
   function closeModal() {
     const o = document.getElementById('modal-overlay');
     if (o) o.remove();
@@ -1565,6 +1653,7 @@
 
   // ------------------------------------------------------------ events
   const actions = {
+    playerCard: (el) => openPlayerCard(el.dataset.pid),
     avatar: (el) => {
       S.avatar = el.dataset.a;
       S.avatarOpen = false;

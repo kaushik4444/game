@@ -66,4 +66,15 @@ async function scriptedPage(browser, { viewport = { width: 390, height: 844 }, m
 const welcome = (extra = {}) => ({ t: 'welcome', id: 'me', name: 'Aarav', avatar: '🧙', avatars: ['🧙', '🦊', '🐉'], emotes: ['👍'], games: [], tables: [], rejoin: [], ...extra });
 const sessionOk = (extra = {}) => ({ ok: true, authenticated: true, player: { id: 'me', display_name: 'Aarav', username: 'aarav', avatar: '🧙', email: 'a@b.c' }, emailVerified: true, csrfToken: 'x', ...extra });
 
-module.exports = { serve, scriptedPage, loadPlaywright, welcome, sessionOk, PUBLIC };
+/** welcome + a running table of `gameId` built by the real engine. extras: per-seat room info (username, ping, bot, ...). */
+function tableMessages(gameId, extras = [], { games = require('../../games'), seed = 1, roomExtra = {} } = {}) {
+  const def = games.get(gameId);
+  const players = extras.map((x, i) => ({ id: x.id || (i === 0 ? 'me' : 'p' + i), name: x.name, avatar: x.avatar || '🧙' }));
+  let a = seed; const rng = () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const g = def.create(players, Object.fromEntries((def.options || []).filter((o) => o.default !== undefined).map((o) => [o.key, o.default])), rng);
+  const room = { code: 'ABCDEF', gameId, hostId: 'me', status: 'playing', options: {}, visibility: 'public', seats: players.length, min: def.seats.min, max: def.seats.max, seatLabels: null, deadline: null, now: Date.now(), spectators: [],
+    members: players.map((p, i) => ({ id: p.id, name: p.name, bot: false, avatar: p.avatar, connected: true, ping: null, username: null, ...extras[i] })), ...roomExtra };
+  return [welcome({ id: 'me', name: players[0].name, games: games.list() }), { t: 'state', room, view: g.view('me') }];
+}
+
+module.exports = { tableMessages, serve, scriptedPage, loadPlaywright, welcome, sessionOk, PUBLIC };
