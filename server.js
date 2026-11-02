@@ -89,6 +89,27 @@ function start(opts = {}) {
   const tokens = new Map(); // secret token -> player
   const rooms = new Map(); // code -> room
   const presence = new Map(); // player id -> { online, lastSeen }; best-effort and instance-local
+  // What a friend may see: online now (a live socket), when they were last seen, and WHICH GAME they are playing (never the
+  // table code, so presence cannot be used to find a private table).
+  const playingAt = (id) => {
+    const q = players.get(id);
+    const room = q && q.room ? rooms.get(q.room) : null;
+    return room && room.status === 'playing' && room.members.some((m) => m.id === id && !m.bot) ? room.gameId : null;
+  };
+  const presenceView = {
+    get: (id) => {
+      const q = players.get(id);
+      const online = Boolean(q && q.connected);
+      return { online, lastSeen: (presence.get(id) || {}).lastSeen || null, playing: online ? playingAt(id) : null };
+    },
+  };
+  const presenceTimers = new Map();
+  function schedulePresence(id) { // debounced: evaluated after the table state has settled
+    if (!id || !dbPool.hasDatabase() || presenceTimers.has(id)) return;
+    const timer = setTimeout(() => { presenceTimers.delete(id); publishPresence(id); }, 150);
+    if (timer.unref) timer.unref();
+    presenceTimers.set(id, timer);
+  }
   let purgeTimer = null;
   let spoolTimer = null;
 
@@ -144,7 +165,7 @@ function start(opts = {}) {
     // Is this table code still open on this server? ('lobby' | 'playing' | null). Used to drop stale recent tables.
     tableStatus: (code) => { const r = rooms.get(code); return r ? r.status : null; },
     friendsContext: {
-      presence,
+      presence: presenceView,
       validateRoomInvite: async (inviterId, gameId, roomCode) => {
         const room = rooms.get(roomCode);
         const player = players.get(inviterId);
@@ -285,16 +306,18 @@ function start(opts = {}) {
     send(recipient.ws, message);
   }
   async function publishPresence(playerId) {
+    if (!dbPool.hasDatabase()) return; // friends exist only with PostgreSQL
     try {
-      const friends = await dbFriends.listFriends(playerId, presence);
+      const friends = await dbFriends.listFriends(playerId, presenceView);
       const owner = players.get(playerId);
       if (owner && owner.connected) send(owner.ws, { t: 'socialPresence', friends });
       for (const friend of friends) {
         const recipient = players.get(friend.id);
         if (recipient && recipient.connected) send(recipient.ws, {
           t: 'socialPresence', playerId,
-          online: Boolean(presence.get(playerId)?.online),
-          lastSeen: presence.get(playerId)?.lastSeen || null,
+          online: presenceView.get(playerId).online,
+          lastSeen: presenceView.get(playerId).lastSeen,
+          playing: presenceView.get(playerId).playing,
         });
       }
     } catch (err) {
@@ -302,10 +325,10 @@ function start(opts = {}) {
     }
   }
   async function canEnterRoom(p, room) {
-    if (room.visibility === 'public' || room.hostId === p.id) return true;
+    if (room.visibility === 'public' || room.hostId === p.id || (room.hosts && room.hosts.has(p.id))) return true;
     if (!dbPool.hasDatabase() || p.isAnonymous) return false;
     try {
-      return await dbFriends.canJoinPrivateRoom(p.id, room.code, room.gameId, room.hostId);
+      return await dbFriends.canJoinPrivateRoom(p.id, room.code, room.gameId, [...new Set([room.hostId, ...(room.hosts || [])])]);
     } catch (err) {
       console.error('[server] private room authorization failed:', err.message);
       return false;
@@ -429,6 +452,7 @@ function start(opts = {}) {
     if (g) {
       if (g.isOver() && room.status !== 'finished') {
         room.status = 'finished';
+        for (const m of humans(room)) schedulePresence(m.id);
         // Persist the completed match once (the status guard above plus the per-game key make a second attempt a no-op)
         try {
           const record = buildMatchRecord(room, g);
@@ -534,6 +558,7 @@ function start(opts = {}) {
   function destroyRoom(room) {
     clearTimeout(room.timer);
     rooms.delete(room.code);
+    for (const m of humans(room)) schedulePresence(m.id);
     if (dbPool.hasDatabase()) dbFriends.expireClosedRoomInvitations(room.code).catch((err) => console.error('[server] invitation cleanup failed:', err.message));
     broadcastTables();
     for (const m of viewers(room)) {
@@ -560,6 +585,7 @@ function start(opts = {}) {
     const next = cands.find(isConnected) || (cur && cur.id !== leaving ? null : cands[0]);
     if (!next || next.id === room.hostId) return false;
     room.hostId = next.id;
+    (room.hosts || (room.hosts = new Set())).add(next.id);
     sys(room, `👑 ${next.name} is now the host`);
     const q = players.get(next.id);
     if (q && q.connected) send(q.ws, { t: 'notice', text: '👑 You are now the host of this table' });
@@ -603,6 +629,7 @@ function start(opts = {}) {
       room.spectators.shift();
       room.members.push({ id: heir.id, name: heir.name, avatar: heir.avatar, bot: false });
       room.hostId = heir.id;
+      (room.hosts || (room.hosts = new Set())).add(heir.id);
       sys(room, `👑 ${heir.name} took a seat and is now the host`);
     } else if (wasHost) ensureHost(room, { leaving: p.id });
     broadcast(room);
@@ -627,6 +654,7 @@ function start(opts = {}) {
 
   // Tables a player sits at or watches are remembered on their account (shown as "Recent tables" on any device).
   const RECENT_ON = new Set(['create', 'join', 'sit']);
+  const PRESENCE_ON = new Set(['create', 'join', 'sit', 'leave', 'start', 'rematch']);
   function trackRecent(p) {
     const room = rooms.get(p.room);
     if (!room) return;
@@ -721,6 +749,7 @@ function start(opts = {}) {
         gameId: def.id,
         visibility: msg.visibility === 'public' ? 'public' : 'private',
         hostId: p.id,
+        hosts: new Set([p.id]), // everyone who has hosted this table: their accepted invitations stay valid after a host change
         status: 'lobby',
         seats: def.seats.default,
         options: sanitizeOptions(def, {}),
@@ -1136,13 +1165,20 @@ function start(opts = {}) {
         try {
           const before = p.room;
           await handlers[msg.t](p, msg);
+          if (PRESENCE_ON.has(msg.t)) {
+            schedulePresence(p.id);
+            const at = rooms.get(p.room);
+            if (at && msg.t === 'start') for (const m of humans(at)) schedulePresence(m.id);
+          }
           if (RECENT_ON.has(msg.t) && p.room && (p.room !== before || (msg.t === 'join' && String(msg.code || '').trim().toUpperCase() === p.room))) trackRecent(p);
         } catch (e) {
           console.error('handler error', msg.t, e);
           sendError(p, 'Something went wrong');
         }
       };
-      run();
+      // one message at a time per socket: a join that waits for the database must finish before the next message
+      // (act, chat, leave...) is looked at, exactly as when every handler was synchronous
+      ws.queue = (ws.queue || Promise.resolve()).then(run);
     });
     ws.on('close', () => {
       const p = ws.player;

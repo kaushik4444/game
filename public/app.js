@@ -503,7 +503,7 @@
 
   function socialHTML() {
     if (S.guest) return '';
-    const friends = S.friends.map((f) => `<li class="social-row"><span class="social-avatar">${esc(f.avatar || '🧙')}</span><span class="social-info"><b>${esc(f.display_name || f.username)}</b><small>@${esc(f.username)} · ${f.online ? 'Online' : 'Last seen ' + (f.last_seen ? new Date(f.last_seen).toLocaleString() : 'unknown')}</small></span><button class="btn ghost small" data-act="removeFriend" data-id="${esc(f.id)}">Remove</button></li>`).join('');
+    const friends = S.friends.map((f) => `<li class="social-row"><span class="social-avatar">${esc(f.avatar || '🧙')}</span><span class="social-info"><b>${esc(f.display_name || f.username)}</b><small>@${esc(f.username)} · ${f.online ? (f.playing ? '🎮 Playing ' + esc((gameMeta(f.playing) || {}).name || f.playing) : '🟢 Online') : 'Last seen ' + (f.last_seen ? new Date(f.last_seen).toLocaleString() : 'unknown')}</small></span><button class="btn ghost small" data-act="removeFriend" data-id="${esc(f.id)}">Remove</button></li>`).join('');
     const friendNames = new Set(S.friends.map((friend) => friend.username));
     const requestNames = new Set([...S.friendRequests.incoming, ...S.friendRequests.outgoing].map((request) => request.username));
     const invitationNames = new Set(S.invitations.incoming.map((invitation) => invitation.username));
@@ -714,7 +714,7 @@
         if (Array.isArray(m.friends)) S.friends = m.friends;
         else {
           const friend = S.friends.find((f) => f.id === m.playerId);
-          if (friend) { friend.online = Boolean(m.online); friend.last_seen = m.lastSeen || friend.last_seen; }
+          if (friend) { friend.online = Boolean(m.online); friend.playing = m.playing || null; friend.last_seen = m.lastSeen || friend.last_seen; }
         }
         if (!S.room) render();
         break;
@@ -1438,13 +1438,13 @@
       ${spectating ? `<section class="panel"><h3>👁 You are watching</h3><p class="hint" style="text-align:left;margin:6px 0 10px">The next game starts when the host presses Start. ${open > 0 ? 'There is an open seat if you want to play.' : 'Ask the host to free a seat if you want to play.'}</p>${open > 0 ? '<button class="btn" data-act="sit">Take a seat</button>' : ''}</section>` : ''}
       ${r.spectators && r.spectators.length ? `<details class="spectator-list"><summary>👁 ${r.spectators.length} watching</summary><div class="spectator-names">${r.spectators.map((x) => esc(x.name)).join(', ')}</div></details>` : ''}
       <section class="panel code-card">
-        <div class="label">Table code · share it with your friends</div>
+        <div class="label">${r.visibility === 'public' ? 'Table code · share it with your friends' : 'Table code · private, invited friends only'}</div>
         <div class="code">${esc(r.code)}</div>
-        <div class="row" style="justify-content:center">
+        ${r.visibility === 'public' ? `<div class="row" style="justify-content:center">
           <button class="btn small" data-act="copyLink">Copy invite link</button>
           <button class="btn small wa" data-act="whatsapp">WhatsApp</button>
           ${navigator.share ? '<button class="btn ghost small" data-act="share">Share…</button>' : ''}
-        </div>
+        </div>` : ''}
         ${isHost ? `<div class="visibility-control"><span class="visibility-status ${r.visibility === 'public' ? 'public' : 'private'}">${r.visibility === 'public' ? '🌐 Public table' : '🔒 Private table'}</span><button class="btn ghost small" data-act="toggleVisibility">${r.visibility === 'public' ? 'Make private' : 'Make public'}</button><small>${r.visibility === 'public' ? 'Anyone can find this table in Sessions in Progress.' : 'Only friends with an accepted invitation can join.'}</small></div>` : ''}
         ${inviteFriendsHTML()}${r.visibility === 'public' ? '<small>Public table links and codes can be shared freely.</small>' : '<small>Private table links and codes are not access grants. Invite each friend above; they must accept first.</small>'}
       </section>

@@ -30,6 +30,20 @@ Never merge this branch into `main` from an agent session. Work in small stages:
 - Test database: local endpoint `127.0.0.1:5432/postgres`; helper creates/drops random `tv_test_*` databases. User provided this as TEST_DATABASE_URL and it passed helper safety checks.
 - Commit `bf1c387571fb6a2f2c0c4fd5e2267da5bf46bb61` (`Fix Stage 6.1 friendship invitation races`) pushed to `origin/feature/stage-6-friends-private-tables`; not merged into `main`.
 
+### S6.2–S6.5 — continued by the agent after the owner's `incomplete stage 6` commit (d2f1a23)
+Already in place from the owner's commit: private tables (default) need an accepted invitation, enforced on `join`, `sit` and reconnect (`canEnterRoom`); invitation APIs validate the room; live `socialNotice` / `socialPresence` messages; friends panel, invitations and the in-lobby invite form in `public/app.js`; migration 008.
+Fixed / added in this session:
+- **Per-socket message order**: handlers became async (`join` awaits the DB) but were fired without waiting, so a following `act`/`chat`/`leave` could overtake a join. Messages of one socket now run through a promise queue (`ws.queue`).
+- **Host change no longer locks guests out**: authorization accepted only invitations from the *current* host, so after a host handover a guest who reconnected was removed from the table. `room.hosts` records everyone who hosted; `canJoinPrivateRoom` takes a list of inviter ids.
+- **Presence shows the game being played** (`playing: 'wizard'`, never the table code); debounced live push (`schedulePresence`) after create/join/sit/leave/start/rematch, game end and table close; no presence DB work in memory mode (it was logging an error per connection).
+- **UI**: private lobbies no longer show Copy link / WhatsApp / Share (they are not access grants); fixed real horizontal overflow at 320px (`.page` and `.seats` grid columns were sized by their content; the table code font now scales). Friends panel checked at 320/375/414/768/1280 (no overflow, buttons >= 34px).
+- **Tests**: spectators test uses public tables (private ones need an invitation); `cleanup.test.js` expects migration 008 as the newest; `private-tables.test.js` expects 401 (memory-mode players have no cookie session) and lost a duplicated tail; `private-tables.pg.test.js` friend-removal check was vacuous (an earlier refusal already satisfied it) - now compares error counts and checks the table; new host-change and presence scenarios; both private-tables suites are registered in `npm test` / `test:pg` / `build`.
+
+### Verification state (honest)
+- Run and passing in the agent sandbox: engine, twentynine, poker, themind, results, scrub, spectators, stats, matchqueue, isolation, email, cleanup, db, production, smoke, private-tables (all DB-free), `npm run build`, `git diff --check`; Playwright layout checks of the lobby/friends UI with mocked API/WebSocket.
+- **NOT run (no PostgreSQL server in the sandbox): every `*.pg.test.js`**, including the new host-change and presence scenarios in `tests/private-tables.pg.test.js`. Run `npm run test:pg` against a disposable database before trusting them.
+- Known gaps: removing a friend revokes invitations and blocks new joins, but does not remove someone who is already seated/watching; presence is per server instance; an unfinished mobile Wizard-header experiment is kept in `git stash` (A3 is already on main, so it is probably obsolete).
+
 ## Remaining Stage 6 work
 
 - **S6.2 — Friends System:** Complete any remaining friend-search/request/list/remove UX and authorization behavior without duplicating the existing backend. Audit actual shipped behavior and agree the exact scope before changes.

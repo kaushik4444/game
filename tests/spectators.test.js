@@ -48,7 +48,7 @@ function client(port, token) {
     return c;
   };
   const table = async (host, o = {}) => {
-    host.send({ t: 'create', gameId: 'wizard' });
+    host.send({ t: 'create', gameId: 'wizard', visibility: 'public' }); // private tables need an accepted invitation (Stage 6); these tests are about spectators
     await until(() => host.room && host.room.members.some((m) => m.id === host.id), 'table created');
     const code = host.room.code;
     if (o.seats) host.send({ t: 'setSeats', seats: o.seats });

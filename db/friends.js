@@ -62,7 +62,7 @@ async function listFriends(playerId, presence = new Map()) {
   );
   return r.rows.map((friend) => {
     const status = presence.get(friend.id);
-    return { ...friend, online: Boolean(status && status.online), last_seen: status ? status.lastSeen : friend.last_seen };
+    return { ...friend, online: Boolean(status && status.online), playing: (status && status.online && status.playing) || null, last_seen: (status && status.lastSeen) || friend.last_seen };
   });
 }
 
@@ -74,7 +74,8 @@ async function hasFriendship(playerA, playerB) {
   return r.rows.length > 0;
 }
 
-async function canJoinPrivateRoom(playerId, roomCode, gameId, inviterId) {
+/** inviterIds: the current host and anyone who hosted this table before (an invitation outlives a host change). */
+async function canJoinPrivateRoom(playerId, roomCode, gameId, inviterIds) {
   requireDb();
   const r = await db.query(
     `SELECT 1
@@ -82,8 +83,8 @@ async function canJoinPrivateRoom(playerId, roomCode, gameId, inviterId) {
      JOIN friendships f ON f.player_a_id = LEAST(i.inviter_id, i.invitee_id)
                        AND f.player_b_id = GREATEST(i.inviter_id, i.invitee_id)
      WHERE i.invitee_id = $1 AND i.room_code = $2 AND i.game_id = $3
-       AND i.inviter_id = $4 AND i.status = 'accepted' AND i.expires_at > NOW()`,
-    [playerId, roomCode, gameId, inviterId]
+       AND i.inviter_id = ANY($4::uuid[]) AND i.status = 'accepted' AND i.expires_at > NOW()`,
+    [playerId, roomCode, gameId, [].concat(inviterIds)]
   );
   return r.rows.length > 0;
 }

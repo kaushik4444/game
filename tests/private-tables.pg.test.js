@@ -60,7 +60,7 @@ async function run() {
       const client = wsClient(app.port, login.json.token);
       clients.push(client);
       await client.wait((c) => c.messages.some((m) => m.t === 'welcome'), `${label} welcome`);
-      return { browser, client, username, id: playerId };
+      return { browser, client, username, id: playerId, token: login.json.token };
     }
 
     const host = await account('Host');
@@ -104,9 +104,60 @@ async function run() {
     const invitees = await dbFriends.authorizedRoomInvitees(host.id, code, 'wizard');
     assert.deepEqual(invitees, [invitee.id]);
 
-    await host.browser.post('/api/me/friends/remove', { friendId: invitee.id });
-    invitee.client.send({ t: 'join', code });
-    await until(() => invitee.client.errors.length > 0, 'friend removal revokes access');
+    // removing the friendship withdraws the permission: the same join that worked is now refused (compare error counts,
+    // earlier refusals are already in the list)
+    invitee.client.send({ t: 'leave' });
+    await invitee.client.wait((c) => c.messages.some((m) => m.t === 'left'), 'invitee left the table');
+    await host.browser.must('/api/me/friends/remove', { friendId: invitee.id });
+    const refusals = invitee.client.errors.length;
+    invitee.client.send({ t: 'join', code, spectate: true });
+    await until(() => invitee.client.errors.length > refusals, 'friend removal revokes access');
+    assert.ok(!host.client.room.spectators.some((x) => x.id === invitee.id), 'and they are not at the table');
+
+    // an accepted invitation survives a change of host: the guests are not thrown out when they reconnect
+    const owner = await account('Owner'); const guestA = await account('GuestA'); const guestB = await account('GuestB');
+    for (const g of [guestA, guestB]) {
+      const fr = await owner.browser.must('/api/me/friend-requests', { username: g.username });
+      await g.browser.must('/api/me/friend-requests/accept', { requestId: fr.json.request.id });
+    }
+    owner.client.send({ t: 'create', gameId: 'wizard', visibility: 'private' });
+    await owner.client.wait((c) => c.room && c.room.visibility === 'private', 'owner table');
+    const code2 = owner.client.room.code;
+    for (const g of [guestA, guestB]) {
+      const inv = await owner.browser.must('/api/me/table-invitations', { username: g.username, gameId: 'wizard', roomCode: code2, expiresAt });
+      await g.browser.must('/api/me/table-invitations/accept', { invitationId: inv.json.invitation.id });
+      g.client.send({ t: 'join', code: code2 });
+      await g.client.wait((c) => c.room && c.room.code === code2, g.username + ' seated');
+    }
+    owner.client.send({ t: 'leave' });
+    await guestA.client.wait((c) => c.room && c.room.hostId !== owner.id, 'host moved to a guest');
+    const newHost = guestA.client.room.hostId;
+    const stayer = newHost === guestA.id ? guestB : guestA;
+    stayer.client.ws.terminate();
+    const back = wsClient(app.port, stayer.token);
+    clients.push(back);
+    await back.wait((c) => c.room && c.room.code === code2, 'the non-host guest is still at the table after reconnecting');
+    assert.ok(!back.errors.some((e) => /invitation/.test(e)), 'no "requires an accepted invitation" refusal');
+
+    // presence: the owner (friends with both guests) sees who is online and which GAME they play, never the table code
+    const hostAcct = newHost === guestA.id ? guestA : guestB;
+    const seenBy = async (viewer, id) => (await viewer.browser.get('/api/me/friends')).json.friends.find((f) => f.id === id);
+    const before = await seenBy(owner, hostAcct.id);
+    assert.equal(before.online, true, 'a connected friend is online');
+    assert.equal(before.playing, null, 'a friend at a lobby is not "playing"');
+    hostAcct.client.send({ t: 'start' });
+    await hostAcct.client.wait((c) => c.room && c.room.status === 'playing', 'game started');
+    let during = null;
+    for (let i = 0; i < 60 && !(during && during.playing); i++) { during = await seenBy(owner, hostAcct.id); await wait(50); }
+    assert.equal(during.playing, 'wizard', 'a friend in a running game is shown as playing that game');
+    assert.ok(!JSON.stringify(during).includes(code2), 'presence never reveals the table code');
+    // and the owner is pushed the change live
+    assert.ok(owner.client.messages.some((m) => m.t === 'socialPresence'), 'live presence message reached the owner');
+    hostAcct.client.ws.terminate();
+    let gone = null;
+    for (let i = 0; i < 60 && !(gone && gone.online === false); i++) { gone = await seenBy(owner, hostAcct.id); await wait(50); }
+    assert.equal(gone.online, false, 'a friend whose socket closed is offline');
+    assert.equal(gone.playing, null);
     console.log('private table PostgreSQL invitation tests passed');
   } finally {
     for (const client of clients) client.ws.terminate();

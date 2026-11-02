@@ -56,7 +56,8 @@ function wsClient(port, token) {
     a.client.send({ t: 'create', gameId: 'wizard' });
     await a.client.wait((c) => c.room && c.room.status === 'lobby', 'private room created');
     const code = a.client.room.code;
-    assert.equal((await a.browser.post('/api/me/friend-requests', { username: b.username })).status, 503, 'social API requires postgres');
+    // no PostgreSQL: the memory-mode players have no cookie session and the social API is unavailable either way
+    assert.ok([401, 503].includes((await a.browser.post('/api/me/friend-requests', { username: b.username })).status), 'social API is not usable without PostgreSQL');
     // In memory mode private access remains host-only; it must not accidentally fall back to code-only access.
     stranger.client.send({ t: 'join', code });
     await stranger.client.wait((c) => c.errors.length > 0, 'unauthorized join rejected');
@@ -68,7 +69,7 @@ function wsClient(port, token) {
     assert.ok(stranger.client.errors.length >= 2);
 
     // Social features stay unavailable without PostgreSQL; the host-only policy must remain enforced.
-    assert.equal((await a.browser.post('/api/me/table-invitations', { username: b.username, gameId: 'wizard', roomCode: code, expiresAt: new Date(Date.now() + 60000).toISOString() })).status, 503);
+    assert.equal((await a.browser.post('/api/me/table-invitations', { username: b.username, gameId: 'wizard', roomCode: code, expiresAt: new Date(Date.now() + 60000).toISOString() })).status, 401);
     a.client.send({ t: 'setVisibility', visibility: 'private' });
     await a.client.wait((c) => c.room && c.room.visibility === 'private', 'room changed private');
     stranger.client.send({ t: 'join', code });
@@ -78,15 +79,6 @@ function wsClient(port, token) {
 
     a.client.send({ t: 'setVisibility', visibility: 'public' });
     await a.client.wait((c) => c.room && c.room.visibility === 'public', 'room changed public again');
-    stranger.client.send({ t: 'join', code });
-    await stranger.client.wait((c) => c.room && c.room.code === code, 'public code join allowed');
-
-    console.log('private table access tests passed (DB-free policy safeguards)');
-    await dbAccount.clearRecentTables(a.id);
-    await dbAccount.clearRecentTables(b.id);
-    await dbAccount.clearRecentTables(stranger.id);
-    a.client.send({ t: 'setVisibility', visibility: 'public' });
-    await a.client.wait((c) => c.room && c.room.visibility === 'public', 'room changed public');
     stranger.client.send({ t: 'join', code });
     await stranger.client.wait((c) => c.room && c.room.code === code, 'public code join allowed');
 
