@@ -163,6 +163,18 @@
     return data;
   }
 
+  /** Take the account the server returned into client state and remember it for the next visit. `fallback` is used when the server omits a field. */
+  function adoptPlayer(player, fallback = {}) {
+    S.name = player && player.display_name ? player.display_name : (fallback.name !== undefined ? fallback.name : S.name);
+    S.username = player && player.username ? player.username : (fallback.username !== undefined ? fallback.username : S.username);
+    S.avatar = player && player.avatar ? player.avatar : S.avatar;
+    S.email = player && player.email ? player.email : '';
+    S.named = !!S.name;
+    if (S.name) store.set('ct_name', S.name);
+    if (S.username) store.set('ct_username', S.username);
+    if (S.avatar) store.set('ct_avatar', S.avatar);
+  }
+
   async function hydrateSession() {
     try {
       const r = await fetch('/api/auth/session', { credentials: 'same-origin' });
@@ -170,15 +182,8 @@
       if (out && out.csrfToken) S.csrf = out.csrfToken;
       if (out && out.ok) S.requireEmailVerification = policyRequiresVerification(out); // secure default stays true when field is missing/invalid
       if (!out || !out.ok || !out.authenticated) return false;
-      S.name = out.player && out.player.display_name ? out.player.display_name : S.name;
-      S.username = out.player && out.player.username ? out.player.username : S.username;
-      S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
+      adoptPlayer(out.player);
       S.emailVerified = !!out.emailVerified;
-      S.email = out.player && out.player.email ? out.player.email : '';
-      S.named = !!S.name;
-      if (S.name) store.set('ct_name', S.name);
-      if (S.username) store.set('ct_username', S.username);
-      if (S.avatar) store.set('ct_avatar', S.avatar);
       return true;
     } catch {
       return false;
@@ -306,17 +311,10 @@
     const out = await postJson('/api/auth/login', { email, password });
     S.token = '';
     if (out.csrfToken) S.csrf = out.csrfToken;
-    S.name = out.player && out.player.display_name ? out.player.display_name : S.name;
-    S.username = out.player && out.player.username ? out.player.username : S.username;
-    S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
-    S.email = out.player && out.player.email ? out.player.email : '';
-    S.named = !!S.name;
+    adoptPlayer(out.player);
     S.requireEmailVerification = policyRequiresVerification(out);
     S.emailVerified = !!(out.player && out.player.email_verified);
     S.signedOutIntentionally = false;
-    if (S.name) store.set('ct_name', S.name);
-    if (S.username) store.set('ct_username', S.username);
-    if (S.avatar) store.set('ct_avatar', S.avatar);
     if (S.requireEmailVerification && !S.emailVerified) {
       openAuthSheet('login', 'Please verify your email before playing. Use “Resend verification email” if the link did not arrive.');
       return;
@@ -330,17 +328,10 @@
     const out = await postJson('/api/auth/register', { displayName: name, username, email, password, avatar: S.avatar || undefined });
     S.token = '';
     if (out.csrfToken) S.csrf = out.csrfToken;
-    S.name = out.player && out.player.display_name ? out.player.display_name : name;
-    S.username = out.player && out.player.username ? out.player.username : String(username || '').toLowerCase();
-    S.avatar = out.player && out.player.avatar ? out.player.avatar : S.avatar;
-    S.email = out.player && out.player.email ? out.player.email : '';
-    S.named = !!S.name;
+    adoptPlayer(out.player, { name, username: String(username || '').toLowerCase() });
     S.requireEmailVerification = policyRequiresVerification(out);
     S.emailVerified = !!(out.player && out.player.email_verified);
     S.signedOutIntentionally = false;
-    if (S.name) store.set('ct_name', S.name);
-    if (S.username) store.set('ct_username', S.username);
-    if (S.avatar) store.set('ct_avatar', S.avatar);
     if (out.requiresVerification) {
       openAuthSheet('login', out.emailSent === false
         ? 'Account created — but the verification email could not be sent. Use “Resend verification email”, then verify and log in.'
@@ -867,7 +858,8 @@
     return `hsl(${h} 55% 42%)`;
   };
   const initial = (name) => esc([...name][0] || '?').toUpperCase();
-  const avatar = (m) => `<span class="avatar" style="background:${avatarColor(m.name)}">${m.avatar ? esc(m.avatar) : initial(m.name)}</span>`;
+  /** A round avatar for anything with a name and an optional emoji; `cls` adds a size/placement class ('big', 'tb-av'). */
+  const avatar = (m, cls = '') => `<span class="avatar${cls ? ' ' + cls : ''}" style="background:${avatarColor(m.name)}">${m.avatar ? esc(m.avatar) : initial(m.name)}</span>`;
 
   function profileHTML() {
     const userBadge = S.username ? `<div class="profile-user">@${esc(S.username)}</div>` : '';
@@ -986,7 +978,7 @@
     if (rel.kind === 'me') others.push('<button type="button" class="btn ghost" data-modal-act="cardEditMe">Edit my profile</button>');
     if (person.username && rel.kind !== 'me') others.push(`<a class="btn ghost" href="/#u/${encodeURIComponent(person.username)}" target="_blank" rel="noopener">View full profile</a>`);
     if (rel.kind !== 'me' && rel.kind !== 'bot') others.push(`<button type="button" class="btn ghost" data-modal-act="cardMute">${muted.has(person.id) ? '🔔 Unmute in chat' : '🔇 Mute in chat'}</button>`);
-    return `<div class="pcard-head"><span class="avatar big" style="background:${avatarColor(person.name)}">${person.avatar ? esc(person.avatar) : initial(person.name)}</span><div><h3>${esc(person.name)}</h3><p>${sub}${person.id === S.id ? ' · you' : ''}</p>${conn}</div></div>${stats}${C.error ? `<p class="auth-msg" role="alert">${esc(C.error)}</p>` : ''}<div class="pcard-actions">${add.join('')}${others.join('')}</div>${S.guest && rel.kind === 'none' ? '<p class="pcard-note">Log in to add friends.</p>' : ''}`;
+    return `<div class="pcard-head">${avatar(person, 'big')}<div><h3>${esc(person.name)}</h3><p>${sub}${person.id === S.id ? ' · you' : ''}</p>${conn}</div></div>${stats}${C.error ? `<p class="auth-msg" role="alert">${esc(C.error)}</p>` : ''}<div class="pcard-actions">${add.join('')}${others.join('')}</div>${S.guest && rel.kind === 'none' ? '<p class="pcard-note">Log in to add friends.</p>' : ''}`;
   }
   function drawCard() {
     if (!S.card) return;
@@ -1222,7 +1214,7 @@
           </div>`
         : statsHTML(P.data.stats);
       inner = `<header class="pp-head">
-          <span class="avatar big" style="background:${avatarColor(name)}">${me.avatar ? esc(me.avatar) : initial(name)}</span>
+          ${avatar({ name, avatar: me.avatar }, 'big')}
           <div class="pp-id"><h1>${esc(name)}</h1><p>${me.username ? `@${esc(me.username)} · ` : ''}${esc(joinedText(me.joinedAt))}</p><p class="pp-conn">📶 Connection ${pingBadge(S.ping, { label: true, live: 'self' })}</p></div>
           <button type="button" class="btn ghost small" data-act="editProfile">Edit profile</button>
         </header>
@@ -1247,7 +1239,7 @@
     else if (P.error) inner = errorBlock(P.error);
     else {
       const d = P.data;
-      inner = `<header class="pp-head"><span class="avatar big" style="background:${avatarColor(d.displayName)}">${d.avatar ? esc(d.avatar) : initial(d.displayName)}</span><div class="pp-id"><h1>${esc(d.displayName)}</h1><p>@${esc(d.username)} · ${esc(joinedText(d.joinedAt))}</p>${friendLine(d.username)}</div></header>
+      inner = `<header class="pp-head">${avatar({ name: d.displayName, avatar: d.avatar }, 'big')}<div class="pp-id"><h1>${esc(d.displayName)}</h1><p>@${esc(d.username)} · ${esc(joinedText(d.joinedAt))}</p>${friendLine(d.username)}</div></header>
         <div class="stat-grid"><div class="stat-tile"><span class="stat-v">${d.played}</span><span class="stat-l">Games played</span></div><div class="stat-tile good"><span class="stat-v">${d.wins}</span><span class="stat-l">Wins</span></div><div class="stat-tile"><span class="stat-v">${d.winRate === null ? '–' : d.winRate + '%'}</span><span class="stat-l">Win rate</span></div></div>`;
     }
     $app.innerHTML = `${topbarHTML()}<main class="page profile-page"><a class="back-link" href="/" data-act="goHome">← Back to games</a>${inner}</main>`;
@@ -1309,7 +1301,7 @@
       return `<nav class="topbar" aria-label="Main">${brand}<div class="tb-right"><button type="button" class="btn ghost small" data-act="showLogin">Log in</button><button type="button" class="btn small" data-act="showRegister">Sign up</button></div></nav>`;
     }
     const name = S.named ? S.name : 'Player';
-    const av = `<span class="avatar tb-av" style="background:${avatarColor(name)}">${S.avatar ? esc(S.avatar) : initial(name)}</span>`;
+    const av = avatar({ name, avatar: S.avatar }, 'tb-av');
     const item = (act, icon, label, extra = '', cls = '') => `<button type="button" role="menuitem" class="menu-item ${cls}" data-act="${act}"><span class="mi-ico" aria-hidden="true">${icon}</span><span class="mi-label">${label}</span>${extra}</button>`;
     const menu = S.menuOpen ? `<div class="menu" role="menu" aria-label="Account">
         <div class="menu-head">${av}<div class="menu-who"><b>${esc(name)}</b>${S.username ? `<small>@${esc(S.username)}</small>` : ''}</div></div>
