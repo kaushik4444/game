@@ -1361,6 +1361,32 @@
   }
 
   /** Edit name and avatar. The name is saved over HTTP (validated on the server); the avatar goes through the table socket as before. */
+  /**
+   * Change the profile picture. Signed-in players save it on their account (validated by the server, which also updates
+   * the table they are sitting at); guests only have it for this session, so it goes over the socket as before.
+   * The old picture comes back if the server refuses, so the screen never shows something that was not saved.
+   */
+  async function changeAvatar(next) {
+    if (!next || next === S.avatar) return;
+    const previous = S.avatar;
+    S.avatar = next;
+    store.set('ct_avatar', next);
+    render();
+    if (S.guest) { send({ t: 'setName', name: S.name || undefined, avatar: next }); return; }
+    try {
+      const out = await postJson('/api/me/avatar', { avatar: next });
+      S.avatar = out.avatar;
+      store.set('ct_avatar', out.avatar);
+      if (S.profile && S.profile.data) S.profile.data.profile.avatar = out.avatar;
+      toast('Profile picture saved');
+    } catch (err) {
+      S.avatar = previous;
+      store.set('ct_avatar', previous || '');
+      toast(err.message || 'Could not save the profile picture.');
+    }
+    render();
+  }
+
   function openEditProfileDialog() {
     const body = () => {
       const name = S.named ? S.name : '';
@@ -1376,14 +1402,11 @@
         <div class="av-picks">${picks}</div>`;
     };
     openModal('Edit profile', body(), (o) => {
-      modalActions.pickAvatar = (el) => {
-        S.avatar = el.dataset.a;
-        store.set('ct_avatar', S.avatar);
-        send({ t: 'setName', name: S.name || undefined, avatar: S.avatar });
+      modalActions.pickAvatar = async (el) => {
+        await changeAvatar(el.dataset.a);
         const keep = o.querySelector('#profileName').value;
         o.querySelector('.modal-body').innerHTML = body();
         o.querySelector('#profileName').value = keep;
-        render();
       };
       o.addEventListener('submit', async (e) => {
         if (e.target.id !== 'nameForm') return;
@@ -1654,13 +1677,7 @@
   // ------------------------------------------------------------ events
   const actions = {
     playerCard: (el) => openPlayerCard(el.dataset.pid),
-    avatar: (el) => {
-      S.avatar = el.dataset.a;
-      S.avatarOpen = false;
-      store.set('ct_avatar', S.avatar);
-      send({ t: 'setName', name: S.name || undefined, avatar: S.avatar });
-      render();
-    },
+    avatar: (el) => { S.avatarOpen = false; changeAvatar(el.dataset.a); },
     scrollGames: () => document.getElementById('games')?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }),
     goHome: (el, e) => { if (e) e.preventDefault(); openPage('home'); },
     reloadProfile: () => loadProfile(),

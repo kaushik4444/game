@@ -19,6 +19,7 @@ let outgoing = []; let friendList = friends.friends; // bob, cyd and dia are fri
   const { server, url, calls } = await serve({
     'GET /api/me/friend-requests?direction=outgoing': () => ({ ok: true, requests: outgoing }),
     'POST /api/me/friend-requests': ({ body }) => { const u = JSON.parse(body).username; if (u === 'broke') return { __status: 409, body: { ok: false, error: 'You already sent a request.' } }; outgoing = [{ id: 'r1', username: u, display_name: u }]; return { ok: true, request: { id: 'r1', status: 'pending' } }; },
+    'POST /api/me/avatar': ({ body }) => { const a = JSON.parse(body).avatar; if (a === '🐉') return { __status: 429, body: { ok: false, error: 'Too many changes. Try again later.' } }; profile.profile.avatar = a; return { ok: true, avatar: a }; },
     'GET /api/me/friends': () => ({ ok: true, friends: friendList }),
     'GET /api/players/ann': () => ({ ok: true, profile: { username: 'ann', displayName: 'Ann', avatar: '🦊', joinedAt: '2026-02-02T00:00:00Z', played: 12, wins: 5, winRate: 41.7 } }),
     'GET /api/auth/session': () => sessionOk(),
@@ -40,6 +41,34 @@ let outgoing = []; let friendList = friends.friends; // bob, cyd and dia are fri
     await page.evaluate(() => window.__push({ t: 'latency', ms: 300 }));
     await page.waitForFunction(() => /300 ms · Poor/.test(document.querySelector('.pp-conn').textContent));
     assert.ok(await page.$('.pp-conn .ping.q-poor'));
+    await ctx.close();
+  });
+
+  await test('changing the profile picture saves it through the API and updates the profile header', async () => {
+    const { page, ctx } = await scriptedPage(browser, { messages: msgs });
+    await page.goto(url + '/#profile');
+    await page.waitForSelector('.pp-head .avatar');
+    await page.click('[data-act="editProfile"]');
+    await page.waitForSelector('#modal-overlay .av-pick');
+    const before = calls.length;
+    await page.click('#modal-overlay .av-pick[data-a="🦊"]');
+    await page.waitForFunction(() => document.querySelector('.pp-head .avatar').textContent.trim() === '🦊');
+    const post = calls.slice(before).find((c) => c.path === '/api/me/avatar');
+    assert.ok(post, 'the choice was sent to the API');
+    assert.equal(JSON.parse(post.body).avatar, '🦊');
+    assert.equal(await page.$eval('#modal-overlay .av-pick.on', (el) => el.dataset.a), '🦊', 'the dialog marks the saved choice');
+    await ctx.close();
+  });
+
+  await test('a refused picture change goes back to the old picture and says why', async () => {
+    const { page, ctx } = await scriptedPage(browser, { messages: msgs });
+    await page.goto(url + '/#profile');
+    await page.waitForSelector('.pp-head .avatar');
+    const was = (await page.textContent('.pp-head .avatar')).trim();
+    await page.click('[data-act="editProfile"]');
+    await page.click('#modal-overlay .av-pick[data-a="🐉"]');
+    await page.waitForFunction(() => /Too many changes/.test(document.body.textContent));
+    assert.equal((await page.textContent('.pp-head .avatar')).trim(), was, 'the header still shows the saved picture');
     await ctx.close();
   });
 

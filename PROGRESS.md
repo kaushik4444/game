@@ -44,8 +44,26 @@ Fixed / added in this session:
 - **NOT run (no PostgreSQL server in the sandbox): every `*.pg.test.js`**, including the new host-change and presence scenarios in `tests/private-tables.pg.test.js`. Run `npm run test:pg` against a disposable database before trusting them.
 - Known gaps: removing a friend revokes invitations and blocks new joins, but does not remove someone who is already seated/watching; presence is per server instance; an unfinished mobile Wizard-header experiment is kept in `git stash` (A3 is already on main, so it is probably obsolete).
 
+## Stage 7 (owner-requested follow-ups on this branch)
+
+Each stage is one commit; resume from the first stage that is not marked done.
+
+- **7.0 / 7.1 (done, commit a41cdf2)**: friend-removal and notification fixes; per-connection ping (`latency` WebSocket message, `tests/ping.test.js`); ping badge on your own profile, on a friend's profile and in the friends list (`pingBadge` in `public/app.js`).
+- **7.2 (done, commit 3f3b716)**: player card - tap any seat at a table (or press Enter/Space on it) to open a card with the handle, ping and record, plus Add friend / Remove friend / profile / mute; guests and bots offer no friend actions (`openPlayerCard`).
+- **7.3 (done, this commit)**: profile picture update.
+  - `POST /api/me/avatar` (`lib/accountRoutes.js`): signed-in only, CSRF, rate limit `RL_ME_AVATAR_LIMIT` (60/h), body `{ avatar }` must be one of the server's fixed `AVATARS`; stored by `db/account.js` `updateAvatar`. The live table (seat, spectator list) updates through `onProfileChanged({ playerId, avatar })` in `server.js`.
+  - Client: one `changeAvatar()` shared by the lobby picker and the Edit-profile dialog; signed-in players save through the API (the old picture comes back with the server's reason if it refuses), guests keep the socket-only path; the profile page header refreshes without a reload.
+  - Decision for the owner: pictures are still the fixed emoji set. Uploading real photos needs image validation, size limits, storage and serving, and moderation; it is deliberately not started. Say if you want it as its own stage.
+  - Tests: new case in `tests/account.pg.test.js` (validation, CSRF, 401 when signed out, DB row, own and public profile, new socket's welcome); two cases in `tests/ui/social-ui.js` (saves and updates header; refused change reverts and shows the reason).
+  - Verified here: `npm run build`; `tests/ui/social-ui.js` 9/9 (Playwright, mocked API); `db/account.updateAvatar` run against a real local PostgreSQL 16 with all 8 migrations applied (bad values -> 400, unknown account -> 404, success persisted); engine, twentynine, poker, themind, results, scrub, cleanup unit suites.
+  - NOT run here: `tests/account.pg.test.js` (needs the `ws` and argon2 packages, which this sandbox cannot install: the npm registry is blocked), so the new route-level case is only syntax-checked. Run `npm run test:pg` before merging.
+- **7.4+ (next)**: UX/UI refactor and polish (see "Next step").
+
 ## Remaining Stage 6 work
 
 - **S6.2 — Friends System:** Complete any remaining friend-search/request/list/remove UX and authorization behavior without duplicating the existing backend. Audit actual shipped behavior and agree the exact scope before changes.
 - **S6.3–S6.5 — Private tables:** Stage 6.1 currently stores invitation metadata and lifecycle only; it does not authorize private-room joins, hide private rooms from public discovery, provide invite UX/share links, or handle related room lifecycle/presence. Define each remaining stage from the project roadmap, then implement in order with API, WebSocket, UI, and race/security tests.
 - Once scope is grounded, deliver each stage with focused and full test suites, accurate progress notes, and separate commits/pushes to this branch. Never merge to `main`; stop after Stage 6 for the requested review.
+
+## Next step
+Stage 7.4: UX/UI refactor of `public/app.js` (one ~1800-line IIFE): remove duplicated friend/avatar markup helpers, split rendering helpers into small named functions, keep behavior identical and re-run `node tests/ui/social-ui.js` and `node tests/ui/wizard-layout.js` (use `NODE_PATH=$(npm root -g)` for Playwright) after every change. Then run `npm run test:pg` against a disposable PostgreSQL before merging.

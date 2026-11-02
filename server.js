@@ -160,6 +160,7 @@ function start(opts = {}) {
     emailSender,
     sendJson,
     readJsonBody,
+    avatars: AVATARS,
     log: opts.log || console,
     // a signed-out or reset account must not keep playing on an already open socket
     // Is this table code still open on this server? ('lobby' | 'playing' | null). Used to drop stale recent tables.
@@ -183,17 +184,24 @@ function start(opts = {}) {
         ws.close(exceptToken ? 4002 : 4001, exceptToken ? 'signed in elsewhere' : 'signed out');
       }
     },
-    // the display name was changed over HTTP (profile page): same effect as the lobby's own rename
-    onProfileChanged: ({ playerId, displayName }) => {
+    // the display name and/or avatar was changed over HTTP (profile page): same effect as the lobby's own change
+    onProfileChanged: ({ playerId, displayName, avatar }) => {
       const p = players.get(playerId);
       if (!p) return;
-      p.name = displayName;
+      if (displayName) p.name = displayName;
+      if (avatar && AVATARS.includes(avatar)) p.avatar = avatar;
       const room = rooms.get(p.room);
       if (!room) return;
       const m = room.members.find((x) => x.id === p.id);
-      if (m && room.status !== 'playing') m.name = p.name; // a running game keeps the names it started with
+      if (m) {
+        if (displayName && room.status !== 'playing') m.name = p.name; // a running game keeps the names it started with
+        if (avatar && AVATARS.includes(avatar)) m.avatar = p.avatar;
+      }
       const s = room.spectators.find((x) => x.id === p.id);
-      if (s) s.name = p.name;
+      if (s) {
+        if (displayName) s.name = p.name;
+        if (avatar && AVATARS.includes(avatar)) s.avatar = p.avatar;
+      }
       broadcast(room);
     },
     // the account no longer exists: leave the table, close the socket, forget the player on this server
