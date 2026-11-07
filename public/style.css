@@ -561,7 +561,7 @@ button.friend-name:focus-visible, button.fs-chip:focus-visible { outline: 2px so
   .game-card .game-art { font-size: 28px; width: 36px; }
   .game-card p { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; }
   .game-card h3 { font-size: 17px; }
-  .game-card .game-actions .btn { min-height: 40px; }
+  .game-card .game-actions .btn { min-height: 44px; }
   .game-grid { gap: 10px; }
 }
 
@@ -592,3 +592,7 @@ button.friend-name:focus-visible, button.fs-chip:focus-visible { outline: 2px so
 .busy-spin { width: 44px; height: 44px; border-radius: 50%; border: 4px solid rgba(255, 255, 255, .25); border-top-color: #ffd76e; animation: busySpin .8s linear infinite; }
 @keyframes busySpin { to { transform: rotate(360deg) } }
 @media (prefers-reduced-motion: reduce) { .busy-spin { animation-duration: 2s; } }
+
+/* Touch targets: 44px tall on phones and tablets (Apple HIG 44pt; WCAG 2.5.5). Last in the file so it overrides the
+   card and form rules above; desktop keeps the compact size. */
+@media (max-width: 900px) { .btn.small, .game-card .game-actions .btn, .tb-brand, button.fs-chip, .fs-title, .home-foot .linklike { min-height: 44px; } }
