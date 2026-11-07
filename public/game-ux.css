@@ -144,4 +144,4 @@ button:focus-visible, [role="button"]:focus-visible { outline: 3px solid var(--g
 @media (prefers-reduced-motion: no-preference) { .speaking { transition: box-shadow .15s ease; } }
 
 /* Phones and tablets: table-toolbar controls and the game card's actions are at least 44px tall (the desktop size stays). */
-@media (max-width: 900px) { .wz-top .btn, .wz-top .row .btn.small, .ludo-tools .btn.small { min-height: 44px; min-width: 44px; } }
+@media (max-width: 900px) { .wz-top .btn, .wz-top .row .btn.small, .ludo-tools .btn.small { min-height: 44px; } }
