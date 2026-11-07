@@ -142,3 +142,6 @@ button:focus-visible, [role="button"]:focus-visible { outline: 3px solid var(--g
 .pseat.speaking .av, .pseat.speaking .avatar { box-shadow: 0 0 0 3px #43c07a, 0 0 16px 4px rgba(67, 192, 122, .7); }
 .seat.speaking .avatar, .ludo-player.speaking, .sl-players li.speaking, .pr-players li.speaking { box-shadow: 0 0 0 2px #43c07a, 0 0 12px 2px rgba(67, 192, 122, .6); }
 @media (prefers-reduced-motion: no-preference) { .speaking { transition: box-shadow .15s ease; } }
+
+/* Phones and tablets: table-toolbar controls and the game card's actions are at least 44px tall (the desktop size stays). */
+@media (max-width: 900px) { .wz-top .btn, .wz-top .row .btn.small, .ludo-tools .btn.small { min-height: 44px; min-width: 44px; } }
